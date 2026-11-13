@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Check, Music, X } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { addTrackToPlaylist, loadPlaylists, PLAYLISTS_CHANGED_EVENT } from '@/utils/storage'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Playlist, Track } from '@/types'
 
 interface AddToPlaylistContextValue {
@@ -75,7 +76,7 @@ export function AddToPlaylistProvider({ children }: { children: ReactNode }) {
               </div>
 
               <div className="add-playlist-track">
-                <div>{track.coverUrl ? <img src={track.coverUrl} alt="" /> : <Music size={20} />}</div>
+                <div>{track.coverUrl ? <img src={getBiliImageUrl(track.coverUrl, 160)} alt="" decoding="async" /> : <Music size={20} />}</div>
                 <span>
                   <strong>{track.title}</strong>
                   <small>{track.artist}</small>

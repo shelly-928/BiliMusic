@@ -81,6 +81,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:fullscreen-change', listener)
     return () => ipcRenderer.removeListener('window:fullscreen-change', listener)
   },
+  onHiddenToTray: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('window:hidden-to-tray', listener)
+    return () => ipcRenderer.removeListener('window:hidden-to-tray', listener)
+  },
+  onShownFromTray: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('window:shown-from-tray', listener)
+    return () => ipcRenderer.removeListener('window:shown-from-tray', listener)
+  },
   updateTrayPlayerState: (state) => ipcRenderer.send('tray:player-state', state),
   onTrayPlayerCommand: (callback) => {
     const listener = (_event, command) => callback(command)

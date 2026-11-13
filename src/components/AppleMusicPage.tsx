@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { Clock, Heart, Music, Play, Trash2 } from 'lucide-react'
 import TrackActions from '@/components/TrackActions'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Track } from '@/types'
 
 export function MusicPageShell({ children }: { children: React.ReactNode }) {
@@ -33,8 +34,7 @@ export function MusicHero({
 }) {
   return (
     <section className={`am-hero am-hero--${tone}`}>
-      {image && <div className="am-hero__image" style={{ backgroundImage: `url(${image})` }} />}
-      <div className="am-hero__grain" />
+      {image && <div className="am-hero__image" style={{ backgroundImage: `url(${getBiliImageUrl(image, 160)})` }} />}
       <div className="am-hero__blob am-hero__blob--a" />
       <div className="am-hero__blob am-hero__blob--b" />
       <div className="am-hero__content">
@@ -108,7 +108,7 @@ export function FeaturedTrackCard({
       transition={{ duration: 0.22 }}
     >
       <div className="am-feature-card__cover">
-        {track.coverUrl ? <img src={track.coverUrl} alt="" loading="lazy" /> : <CoverFallback />}
+        {track.coverUrl ? <img src={getBiliImageUrl(track.coverUrl, 480)} alt="" loading="lazy" decoding="async" /> : <CoverFallback />}
         <div className="am-feature-card__shade">
           <span><Play size={24} fill="currentColor" /></span>
         </div>
@@ -162,7 +162,7 @@ export function TrackListRow({
       )}
       {leading && <div className="am-track-row__leading">{leading}</div>}
       <div className="am-track-row__cover">
-        {track.coverUrl ? <img src={track.coverUrl} alt="" loading="lazy" /> : <CoverFallback />}
+        {track.coverUrl ? <img src={getBiliImageUrl(track.coverUrl, 160)} alt="" loading="lazy" decoding="async" /> : <CoverFallback />}
         <span><Play size={16} fill="currentColor" /></span>
       </div>
       <div className="am-track-row__main">

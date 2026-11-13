@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useAppSettings } from '@/hooks/useAppSettings'
 import { createPlaylist, loadPlaylists, PLAYLISTS_CHANGED_EVENT } from '@/utils/storage'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Playlist } from '@/types'
 
 interface NavItem {
@@ -99,8 +100,8 @@ export default function Sidebar() {
         style={{
           width: collapsed ? 78 : 244,
           background: 'var(--sidebar-bg)',
-          backdropFilter: 'blur(28px) saturate(150%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(150%)',
+          backdropFilter: 'blur(10px) saturate(120%)',
+          WebkitBackdropFilter: 'blur(10px) saturate(120%)',
           borderRight: '1px solid var(--sidebar-border)',
           boxShadow: 'var(--sidebar-shadow)',
           color: 'var(--sidebar-text)',
@@ -251,7 +252,7 @@ export default function Sidebar() {
             }}
           >
             {avatar && isLoggedIn ? (
-              <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <img src={getBiliImageUrl(avatar, 160)} alt="" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             ) : (
               <User size={18} strokeWidth={2.1} style={{ color: 'var(--sidebar-muted-text)' }} />
             )}
@@ -406,7 +407,7 @@ function SidebarLink({ item, compact = false, collapsed = false }: { item: NavIt
 
   return (
     <NavLink to={item.path} style={{ textDecoration: 'none' }}>
-      {({ isActive }) => {
+      {() => {
         const selected = item.path === '/discover'
           ? pathname === '/' || pathname === '/discover'
           : pathname === item.path

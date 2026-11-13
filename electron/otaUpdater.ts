@@ -106,24 +106,48 @@ export async function fetchManifest(): Promise<OtaManifest | null> {
   return manifest
 }
 
-async function downloadBuffer(url: string, onProgress: (pct: number) => void): Promise<Buffer> {
+async function downloadToFileAndVerify(
+  url: string,
+  destPath: string,
+  onProgress: (pct: number) => void,
+): Promise<{ sha512: string; size: number }> {
   const res = await net.fetch(url)
   if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`)
   const total = Number(res.headers.get('content-length') || 0)
+  const hash = crypto.createHash('sha512')
   const reader = res.body?.getReader()
-  if (!reader) return Buffer.from(await res.arrayBuffer())
-  const chunks: Uint8Array[] = []
-  let received = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      chunks.push(value)
-      received += value.length
-      if (total > 0) onProgress(Math.round((received / total) * 100))
-    }
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer())
+    hash.update(buf)
+    await fsp.writeFile(destPath, buf)
+    return { sha512: hash.digest('base64'), size: buf.length }
   }
-  return Buffer.concat(chunks)
+
+  const stream = fs.createWriteStream(destPath)
+  let received = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        hash.update(value)
+        received += value.length
+        if (!stream.write(value)) {
+          await new Promise<void>((resolve) => stream.once('drain', resolve))
+        }
+        if (total > 0) onProgress(Math.round((received / total) * 100))
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => resolve())
+      stream.once('error', reject)
+    })
+  } catch (err) {
+    stream.destroy()
+    await fsp.rm(destPath, { force: true }).catch(() => {})
+    throw err
+  }
+  return { sha512: hash.digest('base64'), size: received }
 }
 
 // 下载 + 校验 + 原子暂存为 pending（不立即套用，等下次启动或手动重载）
@@ -132,16 +156,19 @@ export async function stageRendererUpdate(manifest: OtaManifest): Promise<void> 
   staging = true
   try {
     emitUpdater({ type: 'renderer-available', version: manifest.rendererVersion })
-    const buf = await downloadBuffer(`${RELEASE_BASE}/${manifest.file}`, (pct) =>
-      emitUpdater({ type: 'renderer-progress', percent: pct }),
-    )
-    const digest = crypto.createHash('sha512').update(buf).digest('base64')
-    if (digest !== manifest.sha512) throw new Error('校验失败：渲染包指纹不匹配')
-    ulog('renderer downloaded & sha512 ok:', manifest.file, `${(buf.length / 1048576).toFixed(2)}MB`)
-
     const tmp = path.join(otaRoot, `${manifest.file}.tmp`)
     const dest = path.join(otaRoot, manifest.file)
-    await fsp.writeFile(tmp, buf)
+    const { sha512, size } = await downloadToFileAndVerify(
+      `${RELEASE_BASE}/${manifest.file}`,
+      tmp,
+      (pct) => emitUpdater({ type: 'renderer-progress', percent: pct }),
+    )
+    if (sha512 !== manifest.sha512) {
+      await fsp.rm(tmp, { force: true }).catch(() => {})
+      throw new Error('校验失败：渲染包指纹不匹配')
+    }
+    ulog('renderer downloaded & sha512 ok:', manifest.file, `${(size / 1048576).toFixed(2)}MB`)
+
     await fsp.rename(tmp, dest)
 
     state.pendingVersion = manifest.rendererVersion

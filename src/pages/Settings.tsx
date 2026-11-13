@@ -21,6 +21,7 @@ import {
   UserRound,
 } from 'lucide-react'
 import { ActionButton, MusicHero, MusicPageShell, MusicSection } from '@/components/AppleMusicPage'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import { useTheme } from '@/hooks/useTheme'
 import { useAppSettings } from '@/hooks/useAppSettings'
 import { useAuth } from '@/contexts/AuthContext'
@@ -251,7 +252,7 @@ export default function Settings() {
           <SettingsGroup title="账号" icon={<UserRound size={20} />}>
             <div className="settings-account">
               <div className="settings-account__avatar">
-                {isLoggedIn && avatar ? <img src={avatar} alt="" /> : <UserRound size={22} />}
+                {isLoggedIn && avatar ? <img src={getBiliImageUrl(avatar, 160)} alt="" decoding="async" /> : <UserRound size={22} />}
               </div>
               <div className="settings-account__body">
                 <span className={isLoggedIn ? 'is-online' : ''}>{isLoggedIn ? '已登录' : '未登录'}</span>

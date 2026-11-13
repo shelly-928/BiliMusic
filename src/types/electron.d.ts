@@ -127,6 +127,8 @@ declare global {
       setWindowButtonVisibility?: (visible: boolean) => void
       onMaximizedChange?: (callback: (isMaximized: boolean) => void) => () => void
       onFullscreenChange?: (callback: (isFullscreen: boolean) => void) => () => void
+      onHiddenToTray?: (callback: () => void) => () => void
+      onShownFromTray?: (callback: () => void) => () => void
       updateTrayPlayerState?: (state: TrayPlayerState) => void
       onTrayPlayerCommand?: (callback: (command: TrayPlayerCommand) => void) => () => void
       openExternal: (url: string) => Promise<void>

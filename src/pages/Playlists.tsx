@@ -18,6 +18,7 @@ import {
   PLAYLISTS_CHANGED_EVENT,
   removeTracksFromPlaylist,
 } from '@/utils/storage'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Playlist } from '@/types'
 
 export default function Playlists() {
@@ -70,7 +71,7 @@ function PlaylistCard({ playlist }: { playlist: Playlist }) {
   return (
     <Link to={`/playlists/${playlist.id}`} className="playlist-card">
       <div className="playlist-card__cover">
-        {cover ? <img src={cover} alt="" loading="lazy" /> : <Music size={34} />}
+        {cover ? <img src={getBiliImageUrl(cover, 320)} alt="" loading="lazy" decoding="async" /> : <Music size={34} />}
       </div>
       <div className="playlist-card__body">
         <h3>{playlist.name}</h3>

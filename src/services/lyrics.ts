@@ -286,20 +286,33 @@ function lyricToResult(candidate: LyricCandidate, content: string): LyricResult 
 
 const CACHE_KEY = 'bilimusic_lyrics_v2'
 const MISS_TTL = 24 * 60 * 60 * 1000
+const MAX_CACHE_ENTRIES = 80
 
 type CacheEntry =
   | { status: 'ok'; result: LyricResult }
   | { status: 'miss'; ts: number }
 
+let memoryCache: Record<string, CacheEntry> | null = null
+
 function readCache(): Record<string, CacheEntry> {
+  if (memoryCache) return memoryCache
   try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}')
+    const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}')
+    memoryCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
   } catch {
-    return {}
+    memoryCache = {}
   }
+  return memoryCache!
 }
 
 function writeCache(map: Record<string, CacheEntry>): void {
+  const keys = Object.keys(map)
+  if (keys.length > MAX_CACHE_ENTRIES) {
+    for (const oldKey of keys.slice(0, keys.length - MAX_CACHE_ENTRIES)) {
+      delete map[oldKey]
+    }
+  }
+  memoryCache = map
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(map))
   } catch {
@@ -307,16 +320,19 @@ function writeCache(map: Record<string, CacheEntry>): void {
   }
 }
 
-function cacheOk(trackId: string, result: LyricResult): void {
+function setCacheEntry(trackId: string, entry: CacheEntry): void {
   const map = readCache()
-  map[trackId] = { status: 'ok', result }
+  delete map[trackId] // 刷新键顺序以实现简易 LRU 淘汰
+  map[trackId] = entry
   writeCache(map)
 }
 
+function cacheOk(trackId: string, result: LyricResult): void {
+  setCacheEntry(trackId, { status: 'ok', result })
+}
+
 function cacheMiss(trackId: string): void {
-  const map = readCache()
-  map[trackId] = { status: 'miss', ts: Date.now() }
-  writeCache(map)
+  setCacheEntry(trackId, { status: 'miss', ts: Date.now() })
 }
 
 export function clearLyricCache(trackId: string): void {

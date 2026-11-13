@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { usePlayer } from '@/contexts/PlayerContext'
 import { useAddToPlaylist } from '@/contexts/AddToPlaylistContext'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Track } from '@/types'
 
 const panelSpring = {
@@ -107,8 +108,8 @@ export default function PlayQueue({ open, onClose }: { open: boolean; onClose: (
               flexDirection: 'column',
               borderRadius: 18,
               background: 'var(--queue-bg)',
-              backdropFilter: 'blur(34px) saturate(175%)',
-              WebkitBackdropFilter: 'blur(34px) saturate(175%)',
+              backdropFilter: 'blur(16px) saturate(135%)',
+              WebkitBackdropFilter: 'blur(16px) saturate(135%)',
               border: '1px solid var(--queue-border)',
               boxShadow: 'var(--queue-shadow)',
               overflow: 'hidden',
@@ -182,43 +183,31 @@ export default function PlayQueue({ open, onClose }: { open: boolean; onClose: (
               {queue.length === 0 ? (
                 <EmptyQueue />
               ) : (
-                <AnimatePresence initial={false}>
+                <div>
                   {queue.map((track, index) => (
-                    <motion.div
+                    <QueueRow
                       key={track.id}
-                      layout
-                      initial={{ opacity: 0, height: 0, y: 6 }}
-                      animate={{ opacity: 1, height: 'auto', y: 0 }}
-                      exit={{ opacity: 0, height: 0, y: -4 }}
-                      transition={{
-                        opacity: { duration: 0.18 },
-                        height: { duration: 0.2 },
-                        layout: { type: 'spring', bounce: 0.16, duration: 0.45 },
+                      track={track}
+                      isCurrent={track.id === currentId}
+                      isPlaying={track.id === currentId && player.isPlaying}
+                      selecting={selecting}
+                      selected={selected.has(track.id)}
+                      isDragOver={overIndex === index && dragIndex !== null && dragIndex !== index}
+                      onPlay={() => player.play(track)}
+                      onSelect={() => toggleSelect(track.id)}
+                      onPlayNext={() => player.playNext(track)}
+                      onAddToPlaylist={() => openAddToPlaylist(track)}
+                      onRemove={() => player.removeFromQueue(track.id)}
+                      onDragStart={() => setDragIndex(index)}
+                      onDragOver={() => setOverIndex(index)}
+                      onDrop={() => onDrop(index)}
+                      onDragEnd={() => {
+                        setDragIndex(null)
+                        setOverIndex(null)
                       }}
-                    >
-                      <QueueRow
-                        track={track}
-                        isCurrent={track.id === currentId}
-                        isPlaying={track.id === currentId && player.isPlaying}
-                        selecting={selecting}
-                        selected={selected.has(track.id)}
-                        isDragOver={overIndex === index && dragIndex !== null && dragIndex !== index}
-                        onPlay={() => player.play(track)}
-                        onSelect={() => toggleSelect(track.id)}
-                        onPlayNext={() => player.playNext(track)}
-                        onAddToPlaylist={() => openAddToPlaylist(track)}
-                        onRemove={() => player.removeFromQueue(track.id)}
-                        onDragStart={() => setDragIndex(index)}
-                        onDragOver={() => setOverIndex(index)}
-                        onDrop={() => onDrop(index)}
-                        onDragEnd={() => {
-                          setDragIndex(null)
-                          setOverIndex(null)
-                        }}
-                      />
-                    </motion.div>
+                    />
                   ))}
-                </AnimatePresence>
+                </div>
               )}
             </div>
 
@@ -386,7 +375,7 @@ function QueueRow({
         }}
       >
         {track.coverUrl ? (
-          <img src={track.coverUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
+          <img src={getBiliImageUrl(track.coverUrl, 160)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" decoding="async" />
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Music size={16} style={{ color: 'var(--queue-text-3)' }} />

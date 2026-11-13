@@ -13,6 +13,7 @@ import PlayerSlider from '@/components/PlayerSlider'
 import LyricsView from '@/components/LyricsView'
 import type { LyricCandidate } from '@/services/lyrics'
 import { getVideoComments, type VideoComment } from '@/services/api'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 
 const sliderTheme = {
   ['--track-bg']: 'rgba(255,255,255,0.18)',
@@ -176,14 +177,14 @@ export default function NowPlaying() {
               <>
                 <motion.div
                   className="now-playing-bg__cover"
-                  style={{ backgroundImage: `url(${track.coverUrl})` }}
+                  style={{ backgroundImage: `url(${getBiliImageUrl(track.coverUrl, 480)})` }}
                   initial={{ opacity: 0, scale: 1.12 }}
                   animate={{ opacity: 0.72, scale: [1.16, 1.25, 1.18] }}
                   transition={{ opacity: { duration: 0.8 }, scale: { duration: 22, repeat: Infinity, ease: 'easeInOut' } }}
                 />
                 <motion.div
                   className="now-playing-bg__disc"
-                  style={{ backgroundImage: `url(${track.coverUrl})` }}
+                  style={{ backgroundImage: `url(${getBiliImageUrl(track.coverUrl, 480)})` }}
                   animate={{ rotate: player.isPlaying ? 360 : 0 }}
                   transition={{ duration: 34, repeat: player.isPlaying ? Infinity : 0, ease: 'linear' }}
                 />
@@ -253,10 +254,10 @@ export default function NowPlaying() {
                 <motion.img
                   layoutId="np-cover"
                   className="now-playing-cover"
-                  src={track.coverUrl}
+                  src={getBiliImageUrl(track.coverUrl, 640)}
                   alt={track.title}
                   loading="eager"
-                  decoding="sync"
+                  decoding="async"
                   draggable={false}
                   initial={false}
                   animate={{ opacity: 1, scale: 1, rotateX: 0 }}
@@ -437,7 +438,7 @@ function CommentsPanel({
   return (
     <motion.aside
       className="now-playing-comments"
-      style={{ '--comment-cover': coverUrl ? `url(${coverUrl})` : 'none' } as React.CSSProperties}
+      style={{ '--comment-cover': coverUrl ? `url(${getBiliImageUrl(coverUrl, 160)})` : 'none' } as React.CSSProperties}
       initial={{ opacity: 0, x: 42, scale: 0.985 }}
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 42, scale: 0.985 }}
@@ -484,7 +485,7 @@ function CommentsPanel({
             {comments.map((comment) => (
               <article key={comment.id} className="now-playing-comment">
                 {comment.avatar
-                  ? <img src={comment.avatar} alt="" />
+                  ? <img src={getBiliImageUrl(comment.avatar, 120)} alt="" loading="lazy" decoding="async" />
                   : <div className="now-playing-comment__avatar">{comment.author.slice(0, 1).toUpperCase()}</div>}
                 <div className="now-playing-comment__content">
                   <div className="now-playing-comment__meta">

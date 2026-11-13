@@ -1,5 +1,6 @@
 import { ipcMain, net, app, session } from 'electron'
 import path from 'path'
+import fsSync from 'fs'
 import fs from 'fs/promises'
 
 const BILI_API = 'https://api.bilibili.com'
@@ -61,10 +62,37 @@ export function registerBiliApiHandlers() {
 
     if (!response.ok) throw new Error(`Download failed: ${response.status}`)
 
-    const buffer = Buffer.from(await response.arrayBuffer())
-    await fs.writeFile(filePath, buffer)
+    const reader = response.body?.getReader()
+    if (!reader) {
+      const buffer = Buffer.from(await response.arrayBuffer())
+      await fs.writeFile(filePath, buffer)
+      return { filePath, size: buffer.length }
+    }
 
-    return { filePath, size: buffer.length }
+    const stream = fsSync.createWriteStream(filePath)
+    let size = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) {
+          size += value.byteLength
+          if (!stream.write(value)) {
+            await new Promise<void>((resolve) => stream.once('drain', resolve))
+          }
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        stream.end(() => resolve())
+        stream.once('error', reject)
+      })
+    } catch (err) {
+      stream.destroy()
+      await fs.rm(filePath, { force: true }).catch(() => {})
+      throw err
+    }
+
+    return { filePath, size }
   })
 
   // 提取完整音频源（一键流程）

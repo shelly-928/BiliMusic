@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 
 interface NowPlayingContextValue {
   expanded: boolean
@@ -13,6 +13,11 @@ export function NowPlayingProvider({ children }: { children: ReactNode }) {
   const [expanded, setExpanded] = useState(false)
   const open = useCallback(() => setExpanded(true), [])
   const close = useCallback(() => setExpanded(false), [])
+
+  useEffect(() => {
+    return window.electronAPI?.onHiddenToTray?.(() => setExpanded(false))
+  }, [])
+
   return (
     <NowPlayingContext.Provider value={{ expanded, open, close }}>
       {children}

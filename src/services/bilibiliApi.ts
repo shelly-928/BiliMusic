@@ -15,6 +15,18 @@ export function toHttpsUrl(url: string): string {
   return url
 }
 
+/**
+ * 为 B站 hdslb.com 静态封面/头像追加 CDN 宽度裁剪后缀，避免全量解码 1080p+ 原图。
+ */
+export function getBiliImageUrl(url: string, width = 320): string {
+  const httpsUrl = toHttpsUrl(url)
+  if (!httpsUrl || width <= 0) return httpsUrl
+  if (!/\.hdslb\.com\//i.test(httpsUrl) || httpsUrl.includes('@')) return httpsUrl
+  const clean = httpsUrl.split('?')[0]
+  if (clean !== httpsUrl || !/\.(jpe?g|png|webp)$/i.test(clean)) return httpsUrl
+  return `${httpsUrl}@${width}w.webp`
+}
+
 interface BiliFetchOptions {
   credentials?: RequestCredentials
   params?: Record<string, string | number>
@@ -477,6 +489,7 @@ export function getBestAudioUrl(playData: PlayUrlData): string {
 export interface PopularVideo {
   bvid: string
   aid: number
+  cid?: number
   title: string
   pic: string
   owner: VideoOwner

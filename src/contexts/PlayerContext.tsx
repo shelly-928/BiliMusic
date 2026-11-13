@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { Track, RepeatMode } from '@/types'
 import { extractAudio } from '@/services/api'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import { addRecentTrack, toggleFavoriteTrack, loadFavoriteTracks } from '@/utils/storage'
 import { useAppSettings } from '@/hooks/useAppSettings'
 
@@ -158,6 +159,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const progressRef = useRef(progress)
   const durationRef = useRef(duration)
+  const lastPersistAtRef = useRef(0)
+  const persistedSnapshotRef = useRef<Omit<PersistedPlayerState, 'progress'>>({
+    currentTrack: restoredRef.current.currentTrack,
+    queue: restoredRef.current.queue,
+    duration: restoredRef.current.duration,
+    volume: restoredRef.current.volume,
+    isMuted: restoredRef.current.isMuted,
+    repeatMode: restoredRef.current.repeatMode,
+    isShuffled: restoredRef.current.isShuffled,
+    wasPlaying: Boolean(restoredRef.current.currentTrack && restoredRef.current.wasPlaying),
+    currentIndex: restoredRef.current.currentIndex,
+  })
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -361,12 +374,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setIsPlaying(true)
   }, [isShuffled, queue])
 
+  const syncMediaPosition = useCallback((pos: number) => {
+    if (!('mediaSession' in navigator) || durationRef.current <= 0) return
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: durationRef.current,
+        playbackRate: 1,
+        position: Math.min(Math.max(pos, 0), durationRef.current),
+      })
+    } catch {
+      // Invalid transient durations/progress values should not affect playback.
+    }
+  }, [])
+
   const handleSetProgress = useCallback((p: number) => {
     if (audioRef.current) {
       audioRef.current.currentTime = p
     }
+    progressRef.current = p
     setProgress(p)
-  }, [])
+    syncMediaPosition(p)
+  }, [syncMediaPosition])
 
   const handleSetVolume = useCallback((v: number) => {
     setVolumeState(v)
@@ -522,32 +550,55 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     currentIndexRef.current = index >= 0 ? index : 0
   }, [currentTrack?.id, isShuffled, queue])
 
-  useEffect(() => {
+  const persistPlayerState = useCallback(() => {
     try {
       const state: PersistedPlayerState = {
-        currentTrack,
-        queue,
-        progress,
-        duration,
-        volume,
-        isMuted,
-        repeatMode,
-        isShuffled,
-        wasPlaying: isPlaying,
+        ...persistedSnapshotRef.current,
+        progress: progressRef.current,
         currentIndex: currentIndexRef.current,
       }
       localStorage.setItem(PLAYER_STATE_KEY, JSON.stringify(state))
+      lastPersistAtRef.current = Date.now()
     } catch {
       // ignore persistence failures
     }
-  }, [currentTrack, duration, isMuted, isPlaying, isShuffled, progress, queue, repeatMode, volume])
+  }, [])
+
+  useEffect(() => {
+    persistedSnapshotRef.current = {
+      currentTrack,
+      queue,
+      duration,
+      volume,
+      isMuted,
+      repeatMode,
+      isShuffled,
+      wasPlaying: isPlaying,
+      currentIndex: currentIndexRef.current,
+    }
+    persistPlayerState()
+  }, [currentTrack, duration, isMuted, isPlaying, isShuffled, persistPlayerState, queue, repeatMode, volume])
+
+  // 播放进度高频跳动（~4Hz）不每次序列化全量 queue，改为每 5 秒节流保存 + 页面卸载兜底
+  useEffect(() => {
+    if (!isPlaying) return
+    if (Date.now() - lastPersistAtRef.current >= 5000) {
+      persistPlayerState()
+      syncMediaPosition(progress)
+    }
+  }, [isPlaying, persistPlayerState, progress, syncMediaPosition])
+
+  useEffect(() => {
+    window.addEventListener('beforeunload', persistPlayerState)
+    return () => window.removeEventListener('beforeunload', persistPlayerState)
+  }, [persistPlayerState])
 
   useEffect(() => {
     const pushTrayState = () => window.electronAPI?.updateTrayPlayerState?.({
       hasTrack: Boolean(currentTrack),
       title: currentTrack?.title || '未在播放',
       artist: currentTrack?.artist || '搜索并播放音乐',
-      coverUrl: currentTrack?.coverUrl || '',
+      coverUrl: currentTrack?.coverUrl ? getBiliImageUrl(currentTrack.coverUrl, 160) : '',
       isPlaying,
       queueLength: queue.length,
       theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
@@ -625,8 +676,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const artwork = currentTrack.coverUrl
-      ? [{ src: currentTrack.coverUrl, sizes: '512x512', type: getArtworkType(currentTrack.coverUrl) }]
+    const artworkUrl = currentTrack.coverUrl ? getBiliImageUrl(currentTrack.coverUrl, 480) : ''
+    const artwork = artworkUrl
+      ? [{ src: artworkUrl, sizes: '480x480', type: getArtworkType(artworkUrl) }]
       : undefined
 
     navigator.mediaSession.metadata = new MediaMetadata({
@@ -643,17 +695,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [currentTrack, isPlaying])
 
   useEffect(() => {
-    if (!('mediaSession' in navigator) || !currentTrack || duration <= 0) return
-    try {
-      navigator.mediaSession.setPositionState({
-        duration,
-        playbackRate: 1,
-        position: Math.min(Math.max(progress, 0), duration),
-      })
-    } catch {
-      // Invalid transient durations/progress values should not affect playback.
-    }
-  }, [currentTrack, duration, progress])
+    if (!currentTrack || duration <= 0) return
+    syncMediaPosition(progressRef.current)
+  }, [currentTrack?.id, duration, isPlaying, syncMediaPosition])
 
   // 稳定的播放器值：进度（高频）不在其中，故进度跳动不会改变此引用，
   // usePlayer() 的消费者（列表行等）不会因每秒 4 次的进度更新而重渲染。

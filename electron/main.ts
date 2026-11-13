@@ -18,9 +18,19 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
-// Chrome MCP 远程调试（开发时使用）
-app.commandLine.appendSwitch('remote-debugging-port', '17689')
-app.commandLine.appendSwitch('remote-allow-origins', '*')
+if (
+  process.argv.includes('--no-gpu')
+  || process.argv.includes('--disable-gpu')
+  || process.env.BILIMUSIC_NO_GPU === '1'
+) {
+  app.disableHardwareAcceleration()
+}
+
+// Chrome MCP 远程调试（仅开发态启用，避免生产环境常驻调试服务占内存并暴露端口）
+if (process.env.VITE_DEV_SERVER_URL) {
+  app.commandLine.appendSwitch('remote-debugging-port', '17689')
+  app.commandLine.appendSwitch('remote-allow-origins', '*')
+}
 
 // B站请求头处理
 //
@@ -77,6 +87,14 @@ function setupBiliHeaders() {
     respHeaders['access-control-allow-headers'] = ['*']
     callback({ responseHeaders: respHeaders })
   })
+
+  // 兜底清理未进入 onHeadersReceived（取消、超时、断网）的请求记录，防止 Map 泄漏
+  session.defaultSession.webRequest.onErrorOccurred(apiUrls, (details) => {
+    reqOrigin.delete(details.id)
+  })
+  session.defaultSession.webRequest.onCompleted(apiUrls, (details) => {
+    reqOrigin.delete(details.id)
+  })
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -84,6 +102,7 @@ let tray: Tray | null = null
 let trayWindow: BrowserWindow | null = null
 let trayWindowReady = false
 let pendingTrayShow: { x: number; y: number } | null = null
+let trayDisposeTimer: ReturnType<typeof setTimeout> | null = null
 let isQuitting = false
 
 type TrayCommand = 'toggle-play' | 'next' | 'prev' | 'show-window' | 'quit'
@@ -377,6 +396,19 @@ function getTrayHtml() {
 </html>`
 }
 
+function hideTrayWindow() {
+  if (!trayWindow) return
+  trayWindow.setOpacity(0)
+  trayWindow.hide()
+  if (trayDisposeTimer) clearTimeout(trayDisposeTimer)
+  trayDisposeTimer = setTimeout(() => {
+    trayDisposeTimer = null
+    if (trayWindow && !trayWindow.isVisible()) {
+      trayWindow.destroy()
+    }
+  }, 15_000)
+}
+
 function createTrayWindow() {
   if (isHarmonyOS) return null
   if (trayWindow) return trayWindow
@@ -392,7 +424,6 @@ function createTrayWindow() {
     transparent: true,
     backgroundColor: '#00000000',
     opacity: 0,
-    paintWhenInitiallyHidden: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -407,11 +438,12 @@ function createTrayWindow() {
       showTrayWindowAt(pos.x, pos.y)
     }
   })
-  trayWindow.on('blur', () => {
-    trayWindow?.setOpacity(0)
-    trayWindow?.hide()
-  })
+  trayWindow.on('blur', hideTrayWindow)
   trayWindow.on('closed', () => {
+    if (trayDisposeTimer) {
+      clearTimeout(trayDisposeTimer)
+      trayDisposeTimer = null
+    }
     trayWindow = null
     trayWindowReady = false
     pendingTrayShow = null
@@ -420,6 +452,10 @@ function createTrayWindow() {
 }
 
 function showTrayWindowAt(x: number, y: number) {
+  if (trayDisposeTimer) {
+    clearTimeout(trayDisposeTimer)
+    trayDisposeTimer = null
+  }
   const win = createTrayWindow()
   if (!win) return
   if (!trayWindowReady) {
@@ -440,11 +476,8 @@ function showTrayWindowAt(x: number, y: number) {
 function toggleTrayWindow() {
   if (isHarmonyOS) return
   if (!tray) return
-  const win = createTrayWindow()
-  if (!win) return
-  if (win.isVisible()) {
-    win.setOpacity(0)
-    win.hide()
+  if (trayWindow?.isVisible()) {
+    hideTrayWindow()
     return
   }
 
@@ -467,12 +500,13 @@ function createTray() {
   tray.on('click', showMainWindow)
   tray.on('double-click', showMainWindow)
   if (!isHarmonyOS) {
+    // 托盘弹窗按需创建、闲置销毁，避免后台常驻第二个渲染进程和透明离屏纹理
     tray.on('right-click', toggleTrayWindow)
-    createTrayWindow()
   }
 }
 
 function hideToTray() {
+  mainWindow?.webContents.send('window:hidden-to-tray')
   mainWindow?.hide()
   if (process.platform === 'darwin') app.dock?.hide()
 }
@@ -480,7 +514,7 @@ function hideToTray() {
 function sendTrayCommand(command: TrayCommand) {
   if (command === 'show-window') {
     showMainWindow()
-    trayWindow?.hide()
+    hideTrayWindow()
     return
   }
   if (command === 'quit') {
@@ -531,6 +565,10 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.on('show', () => {
+    mainWindow?.webContents.send('window:shown-from-tray')
   })
 
   const sendMaximizeState = () => {
@@ -589,6 +627,7 @@ ipcMain.on('tray:player-state', (_event, state: TrayPlayerState) => {
     coverUrl: String(state?.coverUrl || ''),
     isPlaying: Boolean(state?.isPlaying),
     queueLength: Number(state?.queueLength || 0),
+    theme: state?.theme === 'light' ? 'light' : 'dark',
   }
   updateTrayState()
 })

@@ -12,6 +12,7 @@ import {
   type UserResult,
   type UpVideo,
 } from '@/services/api'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 import type { Track } from '@/types'
 
 type SearchType = 'video' | 'user'
@@ -308,19 +309,13 @@ export default function SearchPage() {
       })
     }
     scrollTargets.forEach(target => target.addEventListener('scroll', onScroll, { passive: true, capture: true }))
-    window.addEventListener('wheel', onScroll, { passive: true, capture: true })
-    window.addEventListener('touchmove', onScroll, { passive: true, capture: true })
     window.addEventListener('resize', onScroll, { passive: true })
     checkNearBottom()
-    const interval = window.setInterval(checkNearBottom, 700)
 
     return () => {
       observer.disconnect()
       scrollTargets.forEach(target => target.removeEventListener('scroll', onScroll, { capture: true }))
-      window.removeEventListener('wheel', onScroll, { capture: true })
-      window.removeEventListener('touchmove', onScroll, { capture: true })
       window.removeEventListener('resize', onScroll)
-      window.clearInterval(interval)
       if (raf) window.cancelAnimationFrame(raf)
     }
   }, [hasSearched, selectedUser, loading, loadingMore, loadMore, reachedEnd, resultType, results.length, totalResults, userResults.length])
@@ -516,17 +511,13 @@ function VideoRow({ track, subtitle, durationText }: {
   const isCurrent = player.currentTrack?.id === track.id
 
   return (
-    <motion.div
+    <div
       className={`apple-search-row video-row ${isCurrent ? 'is-current' : ''}`}
       onClick={() => player.playNow(track)}
-      variants={itemMotion}
-      whileHover={{ y: -1 }}
-      whileTap={{ scale: 0.995 }}
-      transition={{ duration: 0.18 }}
     >
       <div className="apple-search-cover">
         {track.coverUrl ? (
-          <img src={track.coverUrl} alt="" loading="lazy" />
+          <img src={getBiliImageUrl(track.coverUrl, 160)} alt="" loading="lazy" decoding="async" />
         ) : (
           <div className="apple-search-cover__fallback"><Music size={20} /></div>
         )}
@@ -544,23 +535,19 @@ function VideoRow({ track, subtitle, durationText }: {
       <div className="apple-search-actions">
         <TrackActions track={track} />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
 function UserCard({ user, onEnter }: { user: UserResult; onEnter: () => void }) {
   return (
-    <motion.div
+    <div
       className="apple-search-row user-row"
       onClick={onEnter}
-      variants={itemMotion}
-      whileHover={{ y: -1 }}
-      whileTap={{ scale: 0.995 }}
-      transition={{ duration: 0.18 }}
     >
       <div className="apple-search-avatar">
         {user.avatar ? (
-          <img src={user.avatar} alt="" loading="lazy" />
+          <img src={getBiliImageUrl(user.avatar, 160)} alt="" loading="lazy" decoding="async" />
         ) : (
           <div className="apple-search-cover__fallback"><Users size={22} /></div>
         )}
@@ -574,7 +561,7 @@ function UserCard({ user, onEnter }: { user: UserResult; onEnter: () => void }) 
         <span>进入主页</span>
         <ChevronRight size={16} />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -655,7 +642,7 @@ function UserSpaceView({ user, onBack }: { user: SelectedUser; onBack: () => voi
           <ArrowLeft size={19} />
         </button>
         <div className="apple-user-avatar">
-          {user.avatar ? <img src={user.avatar} alt="" /> : <Users size={28} />}
+          {user.avatar ? <img src={getBiliImageUrl(user.avatar, 160)} alt="" decoding="async" /> : <Users size={28} />}
         </div>
         <div className="apple-user-info">
           <p>UP 主空间</p>

@@ -5,7 +5,7 @@
  * 浏览器环境：通过 renderer 端 bilibiliApi.ts 直接调用（需要 B 站 Cookie）
  */
 
-import type { TrackSource } from '@/services/bilibiliApi'
+import { toHttpsUrl, type TrackSource } from '@/services/bilibiliApi'
 
 function isElectron(): boolean {
   return !!window.electronAPI?.biliApi
@@ -41,13 +41,7 @@ export interface SearchItem {
   pic: string
 }
 
-function normalizePic(pic: string): string {
-  if (!pic) return ''
-  if (pic.startsWith('https://')) return pic
-  if (pic.startsWith('http://')) return pic.replace('http://', 'https://')
-  if (pic.startsWith('//')) return `https:${pic}`
-  return `https:${pic}`
-}
+const normalizePic = toHttpsUrl
 
 export async function searchVideo(keyword: string, page = 1, pageSize = 20): Promise<{ items: SearchItem[]; totalPages: number; totalResults: number }> {
   const mapItem = (item: any): SearchItem => ({
@@ -385,7 +379,7 @@ export async function getPopularVideos(ps = 10, pn = 1): Promise<VideoInfo[]> {
     ownerName: v.owner?.name,
     ownerMid: v.owner?.mid,
     duration: v.duration,
-    cid: v.cid,
+    cid: v.cid ?? 0,
     stat: {
       view: v.stat?.view,
       like: v.stat?.like,

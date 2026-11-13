@@ -21,6 +21,7 @@ import { useNowPlaying } from '@/contexts/NowPlayingContext'
 import { useAddToPlaylist } from '@/contexts/AddToPlaylistContext'
 import PlayQueue from '@/components/PlayQueue'
 import PlayerSlider from '@/components/PlayerSlider'
+import { getBiliImageUrl } from '@/services/bilibiliApi'
 
 const spring = {
   type: 'spring',
@@ -53,8 +54,8 @@ export default function PlayerBar() {
         height: 82,
         width: '100%',
         background: 'var(--player-bg)',
-        backdropFilter: 'blur(30px) saturate(155%)',
-        WebkitBackdropFilter: 'blur(30px) saturate(155%)',
+        backdropFilter: 'blur(10px) saturate(120%)',
+        WebkitBackdropFilter: 'blur(10px) saturate(120%)',
         borderTop: '1px solid var(--player-border)',
         boxShadow: 'var(--player-shadow)',
         color: 'var(--player-text)',
@@ -127,10 +128,10 @@ export default function PlayerBar() {
                 <motion.img
                   layoutId="np-cover"
                   transition={{ type: 'spring', stiffness: 300, damping: 32 }}
-                  src={player.currentTrack.coverUrl}
+                  src={getBiliImageUrl(player.currentTrack.coverUrl, 160)}
                   alt={player.currentTrack.title}
                   loading="eager"
-                  decoding="sync"
+                  decoding="async"
                   draggable={false}
                   whileHover={{ scale: 1.07 }}
                   style={{
