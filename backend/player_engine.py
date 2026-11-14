@@ -216,6 +216,17 @@ class PlayerEngine:
             {"progress": self.progress, "duration": self.duration, "isPlaying": self.is_playing},
         )
 
+    def _replace_track_in_queue(self, old_id: Any, expanded: list[dict[str, Any]]) -> None:
+        if not expanded:
+            return
+        idx = next((i for i, t in enumerate(self.queue) if t.get("id") == old_id), -1)
+        if idx < 0:
+            return
+        new_ids = {t.get("id") for t in expanded}
+        before = [t for t in self.queue[:idx] if t.get("id") not in new_ids]
+        after = [t for t in self.queue[idx + 1 :] if t.get("id") not in new_ids]
+        self.queue = before + expanded + after
+
     async def _load_and_play_track(
         self,
         track: dict[str, Any],
@@ -236,15 +247,25 @@ class PlayerEngine:
         await self._broadcast_state()
 
         async def _worker() -> None:
+            nonlocal track
             try:
                 bvid = str(track.get("bvid") or track.get("id") or "")
                 source = await self._bili.extract_audio(
                     bvid=bvid,
                     aid=track.get("aid"),
                     cid=track.get("cid"),
+                    base_track=track,
                 )
                 if gen != self._load_gen:
                     return
+                expanded = source.get("expandedTracks") or []
+                if expanded:
+                    old_id = track.get("id")
+                    track = expanded[0]
+                    self.current_track = track
+                    self._replace_track_in_queue(old_id, expanded)
+                    self._rebuild_shuffle()
+                    self._resync_index()
                 if source.get("coverUrl"):
                     track["coverUrl"] = source["coverUrl"]
                     self.current_track = track
@@ -340,12 +361,23 @@ class PlayerEngine:
         if not self.current_track:
             await self.play_now(track)
             return
-        tid = track.get("id")
-        without = [t for t in self.queue if t.get("id") != tid]
+        tracks = await self._bili.expand_track(track)
+        if not tracks:
+            return
+        if not self.current_track:
+            await self.play_now(tracks[0])
+            if len(tracks) > 1:
+                await self.add_tracks_to_queue(tracks[1:])
+            return
         cur_id = self.current_track.get("id")
+        filtered = [t for t in tracks if t.get("id") != cur_id]
+        if not filtered:
+            return
+        insert_ids = {t.get("id") for t in filtered}
+        without = [t for t in self.queue if t.get("id") not in insert_ids]
         cur_idx = next((i for i, t in enumerate(without) if t.get("id") == cur_id), -1)
         insert_at = cur_idx + 1 if cur_idx >= 0 else len(without)
-        self.queue = without[:insert_at] + [track] + without[insert_at:]
+        self.queue = without[:insert_at] + filtered + without[insert_at:]
         self._rebuild_shuffle()
         self._resync_index()
         await self._broadcast_state()
@@ -446,11 +478,17 @@ class PlayerEngine:
         tid = track.get("id")
         if any(t.get("id") == tid for t in self.queue):
             return False
-        self.queue.append(track)
+        tracks = await self._bili.expand_track(track)
+        existing = {t.get("id") for t in self.queue}
+        added = [t for t in tracks if t.get("id") not in existing]
+        if not added:
+            return False
+        was_empty = self.current_track is None
+        self.queue.extend(added)
         self._rebuild_shuffle()
-        if not self.current_track:
+        if was_empty:
             self.current_index = 0
-            await self._load_and_play_track(track, autoplay=True, resume_pos=0.0)
+            await self._load_and_play_track(added[0], autoplay=True, resume_pos=0.0)
         else:
             await self._broadcast_state()
         return True

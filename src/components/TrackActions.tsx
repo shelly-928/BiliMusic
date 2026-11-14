@@ -1,5 +1,5 @@
 import { ListStart, Plus, Check } from 'lucide-react'
-import { usePlayer } from '@/contexts/PlayerContext'
+import { isTrackInQueue, usePlayer } from '@/contexts/PlayerContext'
 import AddToPlaylistButton from '@/components/AddToPlaylistButton'
 import type { Track } from '@/types'
 
@@ -11,7 +11,7 @@ import type { Track } from '@/types'
  */
 export default function TrackActions({ track, size = 16 }: { track: Track; size?: number }) {
   const player = usePlayer()
-  const queued = player.queue.some(t => t.id === track.id)
+  const queued = isTrackInQueue(player.queue, track)
 
   return (
     <div

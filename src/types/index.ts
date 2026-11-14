@@ -9,6 +9,7 @@ export interface Track {
   // 音乐中心曲目的顶层 avid+cid：当 bvid 稿件不存在（-404）时回退直取音乐流
   aid?: string | number
   cid?: string | number
+  page?: number
   playCount: number
   isLiked: boolean
   likedAt?: string // 收藏时间，供云同步按 like/unlike 时间合并

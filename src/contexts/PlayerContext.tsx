@@ -93,6 +93,15 @@ function mergeRecentFromBackend(backendRecent: Track[] | undefined, favIds: Set<
   saveRecentTracks(merged)
 }
 
+export function isTrackInQueue(
+  queue: readonly Track[],
+  track: Pick<Track, 'id' | 'bvid' | 'page'>,
+): boolean {
+  return queue.some(
+    t => t.id === track.id || (!track.page && Boolean(track.bvid) && t.bvid === track.bvid && Boolean(t.page)),
+  )
+}
+
 export const REPEAT_MODE_ORDER: readonly RepeatMode[] = ['none', 'all', 'one']
 export const REPEAT_MODE_LABELS: Record<RepeatMode, string> = {
   none: '不循环',
@@ -275,7 +284,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [sendAction])
 
   const addToQueue = useCallback((track: Track) => {
-    const exists = queueRef.current.some(t => t.id === track.id)
+    const exists = isTrackInQueue(queueRef.current, track)
     sendAction({ action: 'addToQueue', track })
     showToast(exists ? '已在播放列表中' : '已加入播放列表')
   }, [sendAction, showToast])

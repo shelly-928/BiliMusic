@@ -15,6 +15,64 @@ BILI_REFERER = "https://www.bilibili.com"
 OIAPI_QQ_LYRIC = "https://www.oiapi.net/api/QQMusicLyric"
 
 
+def _normalize_pic(pic: Any) -> str:
+    s = str(pic or "")
+    if s.startswith("//"):
+        return f"https:{s}"
+    if s.startswith("http://"):
+        return f"https://{s[7:]}"
+    return s
+
+
+def _pick_best_audio_stream(play_data: dict[str, Any]) -> dict[str, Any]:
+    audio_streams = (play_data.get("dash") or {}).get("audio") or []
+    if not audio_streams:
+        raise RuntimeError("No audio stream available")
+    return max(audio_streams, key=lambda s: s.get("bandwidth", 0))
+
+
+def build_expanded_tracks(detail: dict[str, Any], base_track: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expand a multi-part Bilibili video into individual queueable page tracks."""
+    pages = detail.get("pages") or []
+    if len(pages) <= 1:
+        return []
+
+    bvid = str(detail.get("bvid") or base_track.get("bvid") or base_track.get("id") or "")
+    aid = detail.get("aid") or base_track.get("aid") or 0
+    base_title = str(detail.get("title") or base_track.get("title") or "").strip()
+    artist = str((detail.get("owner") or {}).get("name") or base_track.get("artist") or "")
+    cover = _normalize_pic(detail.get("pic")) or str(base_track.get("coverUrl") or "")
+
+    expanded: list[dict[str, Any]] = []
+    for idx, p in enumerate(pages):
+        part_cid = p.get("cid")
+        if not part_cid:
+            continue
+        page_num = int(p.get("page") or (idx + 1))
+        part_title = str(p.get("part") or "").strip()
+        if not part_title or part_title == base_title or part_title.isdigit():
+            title = f"{base_title} (P{page_num})" if base_title else f"P{page_num}"
+        else:
+            title = part_title
+        expanded.append(
+            {
+                **base_track,
+                "id": f"{bvid}_p{page_num}",
+                "bvid": bvid,
+                "aid": aid,
+                "cid": part_cid,
+                "page": page_num,
+                "title": title,
+                "artist": artist,
+                "coverUrl": cover,
+                "duration": int(p.get("duration") or 0),
+                "videoUrl": f"https://www.bilibili.com/video/{bvid}?p={page_num}",
+                "isLiked": False,
+            }
+        )
+    return expanded
+
+
 class BiliClient:
     """Bilibili & lyrics HTTP client with Chrome TLS impersonation and cookie persistence."""
 
@@ -209,40 +267,66 @@ class BiliClient:
             raise RuntimeError(f"Bili API error [{payload.get('code')}]: {payload.get('message')}")
         return payload.get("data") or {}
 
+    async def expand_track(self, track: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return expanded page tracks for an unexpanded multi-part video, or [track]."""
+        if track.get("page") or not track.get("bvid"):
+            return [track]
+        try:
+            detail = await self.fetch_bili_json("/x/web-interface/view", {"bvid": str(track["bvid"])})
+            expanded = build_expanded_tracks(detail, track)
+            return expanded if expanded else [track]
+        except Exception:
+            return [track]
+
     async def extract_audio(
         self,
         bvid: str,
         aid: str | int | None = None,
         cid: str | int | None = None,
+        base_track: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
             if not bvid:
                 raise ValueError("Missing bvid")
             detail = await self.fetch_bili_json("/x/web-interface/view", {"bvid": bvid})
+            pages = detail.get("pages") or []
+            matched_page = (
+                next((p for p in pages if str(p.get("cid")) == str(cid)), None)
+                if cid is not None
+                else None
+            )
+            if matched_page is not None:
+                target_cid = matched_page["cid"]
+                target_duration = int(matched_page.get("duration") or detail.get("duration") or 0)
+            else:
+                target_cid = pages[0]["cid"] if pages and pages[0].get("cid") else detail["cid"]
+                target_duration = int(
+                    (pages[0].get("duration") if pages else None) or detail.get("duration") or 0
+                )
+
             play_data = await self.fetch_bili_json(
                 "/x/player/playurl",
-                {"bvid": bvid, "cid": detail["cid"], "qn": 0, "fnver": 0, "fnval": 16, "fourk": 1},
+                {"bvid": bvid, "cid": target_cid, "qn": 0, "fnver": 0, "fnval": 16, "fourk": 1},
             )
-            audio_streams = (play_data.get("dash") or {}).get("audio") or []
-            if not audio_streams:
-                raise RuntimeError("No audio stream available")
-            best = max(audio_streams, key=lambda s: s.get("bandwidth", 0))
-            pic = str(detail.get("pic") or "")
-            if pic.startswith("//"):
-                pic = f"https:{pic}"
-            elif pic.startswith("http://"):
-                pic = f"https://{pic[7:]}"
+            best = _pick_best_audio_stream(play_data)
+            pic = _normalize_pic(detail.get("pic"))
+            expanded_tracks = (
+                build_expanded_tracks(detail, base_track)
+                if base_track is not None and not base_track.get("page")
+                else []
+            )
             return {
                 "bvid": detail.get("bvid", bvid),
                 "aid": detail.get("aid", 0),
-                "cid": detail.get("cid", 0),
+                "cid": target_cid,
                 "title": detail.get("title", ""),
                 "artist": (detail.get("owner") or {}).get("name", ""),
                 "coverUrl": pic,
-                "duration": detail.get("duration", 0),
+                "duration": target_duration,
                 "audioUrl": best["baseUrl"],
                 "audioQuality": best.get("quality", 0),
                 "audioMimeType": best.get("mimeType", ""),
+                "expandedTracks": expanded_tracks,
             }
         except Exception:
             if aid and cid:
@@ -250,10 +334,7 @@ class BiliClient:
                     "/x/player/playurl",
                     {"avid": aid, "cid": cid, "qn": 0, "fnver": 0, "fnval": 16, "fourk": 1},
                 )
-                audio_streams = (play_data.get("dash") or {}).get("audio") or []
-                if not audio_streams:
-                    raise RuntimeError("No audio stream available")
-                best = max(audio_streams, key=lambda s: s.get("bandwidth", 0))
+                best = _pick_best_audio_stream(play_data)
                 return {
                     "bvid": bvid,
                     "aid": int(aid) if str(aid).isdigit() else 0,
@@ -265,6 +346,7 @@ class BiliClient:
                     "audioUrl": best["baseUrl"],
                     "audioQuality": best.get("quality", 0),
                     "audioMimeType": best.get("mimeType", ""),
+                    "expandedTracks": [],
                 }
             raise
 
