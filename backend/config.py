@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+else:
+    ROOT_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT_DIR / "dist"
 BIN_DIR = ROOT_DIR / "backend" / "bin"
 LIBMPV_DLL = BIN_DIR / "libmpv-2.dll"

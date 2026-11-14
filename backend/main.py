@@ -70,11 +70,16 @@ class _SubprocessWindow:
             pass
         return False
 
-    def _spawn(self, module: str, *args: str) -> None:
+    def _spawn(self, flag: str, module: str, *args: str) -> None:
         env = dict(os.environ)
         env["PYTHONUTF8"] = "1"
+        cmd = (
+            [sys.executable, flag, *args]
+            if getattr(sys, "frozen", False)
+            else [sys.executable, "-m", module, *args]
+        )
         self._proc = subprocess.Popen(
-            [sys.executable, "-m", module, *args],
+            cmd,
             stdin=subprocess.PIPE,
             env=env,
             creationflags=CREATE_NO_WINDOW,
@@ -105,7 +110,7 @@ class UiWindowManager(_SubprocessWindow):
     def open_or_focus(self) -> None:
         if self._send("focus"):
             return
-        self._spawn("backend.ui_window", self._url)
+        self._spawn("--ui-window", "backend.ui_window", self._url)
 
 
 async def run_daemon(open_on_start: bool = True) -> None:
@@ -191,7 +196,23 @@ async def run_daemon(open_on_start: bool = True) -> None:
         await bili.close()
 
 
+def _ensure_stdio() -> None:
+    # --noconsole 冻结进程下 stdout/stderr 可能为 None，避免第三方库写入报错
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
 def main() -> None:
+    _ensure_stdio()
+    if len(sys.argv) >= 3 and sys.argv[1] == "--ui-window":
+        from backend.ui_window import main as ui_main
+
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+        ui_main()
+        return
+
     open_on_start = "--tray" not in sys.argv and "--minimized" not in sys.argv
     if _try_wake_existing_instance(DEFAULT_PORT):
         return
