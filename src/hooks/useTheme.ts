@@ -11,6 +11,13 @@ function getSystemTheme(): 'light' | 'dark' {
 function applyTheme(mode: ThemeMode) {
   const resolved = mode === 'system' ? getSystemTheme() : mode
   document.documentElement.setAttribute('data-theme', resolved)
+  if (!window.electronAPI?.onTrayPlayerCommand) {
+    fetch('/api/player/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'setTheme', theme: resolved }),
+    }).catch(() => {})
+  }
 }
 
 function readStoredMode(): ThemeMode {
@@ -33,9 +40,7 @@ export function useTheme() {
   useEffect(() => {
     if (mode !== 'system') return
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => {
-      document.documentElement.setAttribute('data-theme', getSystemTheme())
-    }
+    const handler = () => applyTheme('system')
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [mode])

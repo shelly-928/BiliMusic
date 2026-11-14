@@ -1,8 +1,6 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { Track, RepeatMode } from '@/types'
-import { extractAudio } from '@/services/api'
-import { getBiliImageUrl } from '@/services/bilibiliApi'
-import { addRecentTrack, toggleFavoriteTrack, loadFavoriteTracks } from '@/utils/storage'
+import { toggleFavoriteTrack, loadFavoriteTracks, loadRecentTracks, saveRecentTracks } from '@/utils/storage'
 import { useAppSettings } from '@/hooks/useAppSettings'
 
 interface PlayerState {
@@ -34,6 +32,7 @@ interface PlayerActions {
   playNow: (track: Track) => void
   playNext: (track: Track) => void
   clearQueue: () => void
+  clearRecent: () => void
   toggleLike: (trackId: string) => void
   playAll: (tracks: Track[]) => void
   playFromQueue: (index: number) => void
@@ -45,69 +44,25 @@ interface PlayerProgress {
   setProgress: (p: number) => void
 }
 
-type PlayerContext = PlayerState & PlayerActions
+type PlayerContextValue = PlayerState & PlayerActions
 
-interface PersistedPlayerState {
+interface BackendSnapshot {
   currentTrack: Track | null
-  queue: Track[]
+  isPlaying: boolean
   progress: number
   duration: number
   volume: number
   isMuted: boolean
   repeatMode: RepeatMode
   isShuffled: boolean
-  wasPlaying: boolean
-  currentIndex: number
+  autoPlay: boolean
+  queue: Track[]
+  loadingAudio: boolean
+  recentTracks?: Track[]
 }
 
-const PlayerContext = createContext<PlayerContext | null>(null)
+const PlayerContext = createContext<PlayerContextValue | null>(null)
 const PlayerProgressContext = createContext<PlayerProgress | null>(null)
-const PLAYER_STATE_KEY = 'bilimusic_player_state'
-
-function loadPersistedPlayerState(): PersistedPlayerState {
-  const fallbackVolume = localStorage.getItem('bilimusic_volume')
-  const fallback: PersistedPlayerState = {
-    currentTrack: null,
-    queue: [],
-    progress: 0,
-    duration: 0,
-    volume: fallbackVolume ? parseInt(fallbackVolume) : 80,
-    isMuted: false,
-    repeatMode: 'none',
-    isShuffled: false,
-    wasPlaying: false,
-    currentIndex: -1,
-  }
-
-  try {
-    const raw = localStorage.getItem(PLAYER_STATE_KEY)
-    if (!raw) return fallback
-    const parsed = JSON.parse(raw) as Partial<PersistedPlayerState>
-    const queue = Array.isArray(parsed.queue) ? parsed.queue : []
-    return {
-      ...fallback,
-      ...parsed,
-      currentTrack: parsed.currentTrack || null,
-      queue,
-      progress: Math.max(0, Number(parsed.progress || 0)),
-      duration: Math.max(0, Number(parsed.duration || 0)),
-      volume: Math.min(100, Math.max(0, Number(parsed.volume ?? fallback.volume))),
-      currentIndex: Number.isFinite(parsed.currentIndex) ? Number(parsed.currentIndex) : -1,
-      repeatMode: parsed.repeatMode === 'one' || parsed.repeatMode === 'all' ? parsed.repeatMode : 'none',
-    }
-  } catch {
-    return fallback
-  }
-}
-
-function shuffleArray<T>(arr: T[]): T[] {
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
 
 function shouldIgnoreSpaceShortcut(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -118,59 +73,60 @@ function shouldIgnoreSpaceShortcut(target: EventTarget | null): boolean {
   return Boolean(role && ['button', 'textbox', 'searchbox', 'slider', 'switch', 'combobox'].includes(role))
 }
 
-function getArtworkType(url: string): string | undefined {
-  if (/\.webp($|\?)/i.test(url)) return 'image/webp'
-  if (/\.png($|\?)/i.test(url)) return 'image/png'
-  if (/\.(jpe?g)($|\?)/i.test(url)) return 'image/jpeg'
-  return undefined
+function syncLikedFlags(track: Track | null, favIds: Set<string>): Track | null {
+  if (!track) return null
+  const liked = favIds.has(track.id)
+  return track.isLiked === liked ? track : { ...track, isLiked: liked }
 }
 
-function setMediaSessionAction(action: MediaSessionAction, handler: MediaSessionActionHandler | null): void {
-  try {
-    navigator.mediaSession.setActionHandler(action, handler)
-  } catch {
-    // Some Chromium/Electron platform builds expose only part of the action set.
+function mergeRecentFromBackend(backendRecent: Track[] | undefined, favIds: Set<string>): void {
+  if (!backendRecent?.length) return
+  const existing = loadRecentTracks()
+  const seen = new Set<string>()
+  const merged: Track[] = []
+  for (const t of [...backendRecent, ...existing]) {
+    if (!t?.id || seen.has(t.id)) continue
+    seen.add(t.id)
+    merged.push({ ...t, isLiked: favIds.has(t.id) })
+    if (merged.length >= 50) break
   }
+  saveRecentTracks(merged)
 }
 
-function clearMediaSessionActions(actions: MediaSessionAction[]): void {
-  actions.forEach(action => setMediaSessionAction(action, null))
+export const REPEAT_MODE_ORDER: readonly RepeatMode[] = ['none', 'all', 'one']
+export const REPEAT_MODE_LABELS: Record<RepeatMode, string> = {
+  none: '不循环',
+  all: '列表循环',
+  one: '单曲循环',
 }
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const { settings } = useAppSettings()
-  const restoredRef = useRef(loadPersistedPlayerState())
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(() => restoredRef.current.currentTrack)
-  const [isPlaying, setIsPlaying] = useState(() => Boolean(restoredRef.current.currentTrack && restoredRef.current.wasPlaying))
-  const [progress, setProgress] = useState(() => restoredRef.current.progress)
-  const [duration, setDuration] = useState(() => restoredRef.current.duration)
-  const [volume, setVolumeState] = useState(() => restoredRef.current.volume)
-  const [isMuted, setIsMuted] = useState(() => restoredRef.current.isMuted)
-  const [repeatMode, setRepeatMode] = useState<RepeatMode>(() => restoredRef.current.repeatMode)
-  const [isShuffled, setIsShuffled] = useState(() => restoredRef.current.isShuffled)
-  const [queue, setQueue] = useState<Track[]>(() => restoredRef.current.queue)
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [volume, setVolumeState] = useState(80)
+  const [isMuted, setIsMutedState] = useState(false)
+  const [repeatMode, setRepeatModeState] = useState<RepeatMode>('none')
+  const [isShuffled, setIsShuffledState] = useState(false)
+  const [queue, setQueue] = useState<Track[]>([])
   const [loadingAudio, setLoadingAudio] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
 
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const shuffledQueueRef = useRef<Track[]>([])
-  const currentIndexRef = useRef(restoredRef.current.currentIndex)
-  const shouldAutoplayRef = useRef(Boolean(restoredRef.current.currentTrack && restoredRef.current.wasPlaying))
+  const wsRef = useRef<WebSocket | null>(null)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const progressRef = useRef(progress)
-  const durationRef = useRef(duration)
-  const lastPersistAtRef = useRef(0)
-  const persistedSnapshotRef = useRef<Omit<PersistedPlayerState, 'progress'>>({
-    currentTrack: restoredRef.current.currentTrack,
-    queue: restoredRef.current.queue,
-    duration: restoredRef.current.duration,
-    volume: restoredRef.current.volume,
-    isMuted: restoredRef.current.isMuted,
-    repeatMode: restoredRef.current.repeatMode,
-    isShuffled: restoredRef.current.isShuffled,
-    wasPlaying: Boolean(restoredRef.current.currentTrack && restoredRef.current.wasPlaying),
-    currentIndex: restoredRef.current.currentIndex,
-  })
+  const seekSuppressUntilRef = useRef(0)
+  const queueRef = useRef<Track[]>([])
+  const currentTrackRef = useRef<Track | null>(null)
+
+  useEffect(() => {
+    queueRef.current = queue
+  }, [queue])
+
+  useEffect(() => {
+    currentTrackRef.current = currentTrack
+  }, [currentTrack])
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -178,445 +134,210 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     toastTimerRef.current = setTimeout(() => setToast(null), 2000)
   }, [])
 
-  // 初始化 audio 元素
-  useEffect(() => {
-    const audio = new Audio()
-    audio.volume = volume / 100
-    audioRef.current = audio
+  const applySnapshot = useCallback((snap: BackendSnapshot) => {
+    const favIds = new Set(loadFavoriteTracks().map(t => t.id))
+    const nextTrack = syncLikedFlags(snap.currentTrack || null, favIds)
+    const nextQueue = Array.isArray(snap.queue)
+      ? snap.queue.map(t => ({ ...t, isLiked: favIds.has(t.id) }))
+      : []
 
-    const onTimeUpdate = () => setProgress(audio.currentTime)
-    const onDuration = () => setDuration(audio.duration || 0)
-    const onEnded = () => { /* handled in playTrack */ }
-    const onError = () => {
-      setLoadingAudio(false)
-      setIsPlaying(false)
+    setCurrentTrack(nextTrack)
+    setQueue(nextQueue)
+    setIsPlaying(Boolean(snap.isPlaying))
+    setDuration(Math.max(0, Number(snap.duration || 0)))
+    if (Date.now() > seekSuppressUntilRef.current) {
+      setProgress(Math.max(0, Number(snap.progress || 0)))
     }
-
-    audio.addEventListener('timeupdate', onTimeUpdate)
-    audio.addEventListener('loadedmetadata', onDuration)
-    audio.addEventListener('ended', onEnded)
-    audio.addEventListener('error', onError)
-
-    return () => {
-      audio.removeEventListener('timeupdate', onTimeUpdate)
-      audio.removeEventListener('loadedmetadata', onDuration)
-      audio.removeEventListener('ended', onEnded)
-      audio.removeEventListener('error', onError)
-      audio.pause()
-      audio.src = ''
-    }
+    setVolumeState(Math.min(100, Math.max(0, Number(snap.volume ?? 80))))
+    setIsMutedState(Boolean(snap.isMuted))
+    setRepeatModeState(snap.repeatMode === 'one' || snap.repeatMode === 'all' ? snap.repeatMode : 'none')
+    setIsShuffledState(Boolean(snap.isShuffled))
+    setLoadingAudio(Boolean(snap.loadingAudio))
+    mergeRecentFromBackend(snap.recentTracks, favIds)
   }, [])
 
-  // volume 同步到 audio
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = volume / 100
-      audioRef.current.muted = isMuted
-    }
-    localStorage.setItem('bilimusic_volume', String(volume))
-  }, [volume, isMuted])
-
-  useEffect(() => {
-    progressRef.current = progress
-  }, [progress])
-
-  useEffect(() => {
-    durationRef.current = duration
-  }, [duration])
-
-  const handleTrackEnd = useCallback(() => {
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (!settings.autoPlay && repeatMode !== 'one') {
-      setIsPlaying(false)
+  const sendAction = useCallback((payload: Record<string, unknown>) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload))
       return
     }
-    if (displayQueue.length === 0) {
-      setIsPlaying(false)
-      return
-    }
+    void fetch('/api/player/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {})
+  }, [])
 
-    switch (repeatMode) {
-      case 'one':
-        if (audioRef.current) {
-          audioRef.current.currentTime = 0
-          shouldAutoplayRef.current = true
-          audioRef.current.play().catch(() => {})
-        }
-        return
-      case 'all': {
-        const nextIdx = currentIndexRef.current + 1 >= displayQueue.length
-          ? 0 : currentIndexRef.current + 1
-        currentIndexRef.current = nextIdx
-        shouldAutoplayRef.current = true
-        setCurrentTrack(displayQueue[nextIdx])
-        setProgress(0)
-        setIsPlaying(true)
-        return
-      }
-      default: {
-        const nextIdx = currentIndexRef.current + 1
-        if (nextIdx >= displayQueue.length) {
-          setIsPlaying(false)
-          return
-        }
-        currentIndexRef.current = nextIdx
-        shouldAutoplayRef.current = true
-        setCurrentTrack(displayQueue[nextIdx])
-        setProgress(0)
-        setIsPlaying(true)
-      }
-    }
-  }, [isShuffled, queue, repeatMode, settings.autoPlay])
-
-  // 当 currentTrack 变化时加载并播放音频
+  // Initial state hydration + real-time WebSocket subscription
   useEffect(() => {
-    if (!currentTrack || !audioRef.current) return
+    let closed = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 
-    let cancelled = false
-    const audio = audioRef.current
+    fetch('/api/player/state')
+      .then(r => (r.ok ? r.json() : null))
+      .then((snap: BackendSnapshot | null) => {
+        if (!closed && snap) applySnapshot(snap)
+      })
+      .catch(() => {})
 
-    async function loadAndPlay() {
-      setLoadingAudio(true)
-      try {
-        const fallback = currentTrack!.aid && currentTrack!.cid
-          ? { aid: currentTrack!.aid, cid: currentTrack!.cid }
-          : undefined
-        const source = await extractAudio(currentTrack!.bvid || currentTrack!.id, fallback)
-        if (cancelled) return
-        const targetProgress = progress > 0 ? progress : 0
-        audio.src = source.audioUrl
-        audio.currentTime = targetProgress
-        if (shouldAutoplayRef.current) {
-          await audio.play()
-          setIsPlaying(true)
-        } else {
-          audio.pause()
-          setIsPlaying(false)
-        }
-        setDuration(source.duration || audio.duration || 0)
+    const connectWs = () => {
+      if (closed) return
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws`)
+      wsRef.current = ws
 
-        // 更新封面（提取到的可能更高清）
-        if (source.coverUrl) {
-          setCurrentTrack(prev => prev ? { ...prev, coverUrl: source.coverUrl } : null)
+      ws.onmessage = (event) => {
+        if (closed) return
+        try {
+          const msg = JSON.parse(event.data) as { type: string; data: any }
+          if (msg.type === 'state') {
+            applySnapshot(msg.data as BackendSnapshot)
+          } else if (msg.type === 'progress') {
+            const p = msg.data as { progress?: number; duration?: number; isPlaying?: boolean }
+            if (typeof p.duration === 'number') setDuration(Math.max(0, p.duration))
+            if (typeof p.isPlaying === 'boolean') setIsPlaying(p.isPlaying)
+            if (typeof p.progress === 'number' && Date.now() > seekSuppressUntilRef.current) {
+              setProgress(Math.max(0, p.progress))
+            }
+          }
+        } catch {
+          // ignore malformed frames
         }
-        // 记录最近播放
-        addRecentTrack({ ...currentTrack!, coverUrl: source.coverUrl || currentTrack!.coverUrl })
-      } catch {
-        if (!cancelled) {
-          // 降级：直接用原始信息触发 play（无音频源，标记为不可播放）
-          setIsPlaying(false)
+      }
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null
+        if (!closed) {
+          reconnectTimer = setTimeout(connectWs, 1000)
         }
-      } finally {
-        if (!cancelled) setLoadingAudio(false)
       }
     }
 
-    loadAndPlay()
-    return () => { cancelled = true }
-  }, [currentTrack?.id, currentTrack?.bvid])
+    connectWs()
+    return () => {
+      closed = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      wsRef.current?.close()
+      wsRef.current = null
+    }
+  }, [applySnapshot])
 
-  // ended 事件
   useEffect(() => {
-    if (!audioRef.current) return
-    const handler = () => handleTrackEnd()
-    audioRef.current.addEventListener('ended', handler)
-    return () => audioRef.current?.removeEventListener('ended', handler)
-  }, [handleTrackEnd])
+    sendAction({ action: 'setAutoPlay', autoPlay: settings.autoPlay })
+  }, [settings.autoPlay, sendAction])
 
   const play = useCallback((track: Track) => {
-    shouldAutoplayRef.current = true
-    setCurrentTrack(track)
-    setProgress(0)
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    const idx = displayQueue.findIndex(t => t.id === track.id)
-    currentIndexRef.current = idx >= 0 ? idx : 0
-  }, [isShuffled, queue])
+    sendAction({ action: 'play', track })
+  }, [sendAction])
 
   const pause = useCallback(() => {
-    shouldAutoplayRef.current = false
-    audioRef.current?.pause()
-    setIsPlaying(false)
-  }, [])
+    sendAction({ action: 'pause' })
+  }, [sendAction])
 
   const togglePlay = useCallback(() => {
-    if (!currentTrack) return
-    if (isPlaying) {
-      shouldAutoplayRef.current = false
-      audioRef.current?.pause()
-      setIsPlaying(false)
-    } else {
-      shouldAutoplayRef.current = true
-      audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {})
-    }
-  }, [currentTrack, isPlaying])
+    sendAction({ action: 'togglePlay' })
+  }, [sendAction])
 
   const next = useCallback(() => {
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (displayQueue.length === 0) return
-    const nextIdx = currentIndexRef.current + 1 >= displayQueue.length
-      ? 0 : currentIndexRef.current + 1
-    currentIndexRef.current = nextIdx
-    shouldAutoplayRef.current = true
-    setCurrentTrack(displayQueue[nextIdx])
-    setProgress(0)
-    setIsPlaying(true)
-  }, [isShuffled, queue])
+    sendAction({ action: 'next' })
+  }, [sendAction])
 
   const prev = useCallback(() => {
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (displayQueue.length === 0) return
-    const prevIdx = currentIndexRef.current - 1 < 0
-      ? displayQueue.length - 1 : currentIndexRef.current - 1
-    currentIndexRef.current = prevIdx
-    shouldAutoplayRef.current = true
-    setCurrentTrack(displayQueue[prevIdx])
-    setProgress(0)
-    setIsPlaying(true)
-  }, [isShuffled, queue])
-
-  const syncMediaPosition = useCallback((pos: number) => {
-    if (!('mediaSession' in navigator) || durationRef.current <= 0) return
-    try {
-      navigator.mediaSession.setPositionState({
-        duration: durationRef.current,
-        playbackRate: 1,
-        position: Math.min(Math.max(pos, 0), durationRef.current),
-      })
-    } catch {
-      // Invalid transient durations/progress values should not affect playback.
-    }
-  }, [])
+    sendAction({ action: 'prev' })
+  }, [sendAction])
 
   const handleSetProgress = useCallback((p: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = p
-    }
-    progressRef.current = p
-    setProgress(p)
-    syncMediaPosition(p)
-  }, [syncMediaPosition])
+    const nextPos = Math.max(0, p)
+    seekSuppressUntilRef.current = Date.now() + 350
+    setProgress(nextPos)
+    sendAction({ action: 'seek', progress: nextPos })
+  }, [sendAction])
 
   const handleSetVolume = useCallback((v: number) => {
     setVolumeState(v)
-  }, [])
+    sendAction({ action: 'setVolume', volume: v })
+  }, [sendAction])
+
+  const setIsMuted = useCallback((m: boolean) => {
+    setIsMutedState(m)
+    sendAction({ action: 'setMuted', muted: m })
+  }, [sendAction])
+
+  const setRepeatMode = useCallback((mode: RepeatMode) => {
+    setRepeatModeState(mode)
+    sendAction({ action: 'setRepeatMode', mode })
+  }, [sendAction])
+
+  const setIsShuffled = useCallback((shuffled: boolean) => {
+    setIsShuffledState(shuffled)
+    sendAction({ action: 'setShuffled', shuffled })
+  }, [sendAction])
 
   const addToQueue = useCallback((track: Track) => {
-    const exists = queue.some(t => t.id === track.id)
-    setQueue(prev => {
-      if (prev.some(t => t.id === track.id)) return prev
-      const newQueue = [...prev, track]
-      if (!currentTrack) {
-        shouldAutoplayRef.current = true
-        setCurrentTrack(track)
-        currentIndexRef.current = 0
-      }
-      return newQueue
-    })
+    const exists = queueRef.current.some(t => t.id === track.id)
+    sendAction({ action: 'addToQueue', track })
     showToast(exists ? '已在播放列表中' : '已加入播放列表')
-  }, [queue, currentTrack, showToast])
+  }, [sendAction, showToast])
 
   const addTracksToQueue = useCallback((tracks: Track[]) => {
-    setQueue(prev => {
-      const existingIds = new Set(prev.map(t => t.id))
-      const newTracks = tracks.filter(t => !existingIds.has(t.id))
-      const newQueue = [...prev, ...newTracks]
-      if (!currentTrack && newQueue.length > 0) {
-        shouldAutoplayRef.current = true
-        setCurrentTrack(newQueue[0])
-        currentIndexRef.current = 0
-      }
-      return newQueue
-    })
-  }, [currentTrack])
-
-  // 队列变更后把 currentIndexRef 重新对齐到当前曲目（避免 next/prev 错位）
-  const resyncIndex = useCallback((nextQueue: Track[]) => {
-    const curId = currentTrack?.id
-    if (curId) currentIndexRef.current = nextQueue.findIndex(t => t.id === curId)
-  }, [currentTrack])
+    sendAction({ action: 'addTracksToQueue', tracks })
+  }, [sendAction])
 
   const removeFromQueue = useCallback((trackId: string) => {
-    setQueue(prev => {
-      const next = prev.filter(t => t.id !== trackId)
-      resyncIndex(next)
-      return next
-    })
-  }, [resyncIndex])
+    sendAction({ action: 'removeFromQueue', trackId })
+  }, [sendAction])
 
   const removeMultipleFromQueue = useCallback((trackIds: string[]) => {
-    const idSet = new Set(trackIds)
-    setQueue(prev => {
-      const next = prev.filter(t => !idSet.has(t.id))
-      resyncIndex(next)
-      return next
-    })
-  }, [resyncIndex])
+    sendAction({ action: 'removeMultipleFromQueue', trackIds })
+  }, [sendAction])
 
-  // 调整顺序：把 fromIndex 的曲目移动到 toIndex
   const moveInQueue = useCallback((fromIndex: number, toIndex: number) => {
-    setQueue(prev => {
-      if (
-        fromIndex === toIndex ||
-        fromIndex < 0 || fromIndex >= prev.length ||
-        toIndex < 0 || toIndex >= prev.length
-      ) return prev
-      const next = [...prev]
-      const [moved] = next.splice(fromIndex, 1)
-      next.splice(toIndex, 0, moved)
-      resyncIndex(next)
-      return next
-    })
-  }, [resyncIndex])
+    sendAction({ action: 'moveInQueue', fromIndex, toIndex })
+  }, [sendAction])
 
-  // 立即播放：把曲目置于队列首位并播放（点击歌曲的默认行为）
   const playNow = useCallback((track: Track) => {
-    shouldAutoplayRef.current = true
-    setQueue(prev => [track, ...prev.filter(t => t.id !== track.id)])
-    setCurrentTrack(track)
-    setProgress(0)
-    currentIndexRef.current = 0
-    setIsPlaying(true)
-  }, [])
+    sendAction({ action: 'playNow', track })
+  }, [sendAction])
 
-  // 下一首播放：把曲目插入到当前曲目之后（不在队列则新增；无播放则等同立即播放）
   const playNext = useCallback((track: Track) => {
-    if (!currentTrack) { playNow(track); return }
-    setQueue(prev => {
-      const without = prev.filter(t => t.id !== track.id)
-      const curIdx = without.findIndex(t => t.id === currentTrack.id)
-      const insertAt = curIdx >= 0 ? curIdx + 1 : without.length
-      const next = [...without.slice(0, insertAt), track, ...without.slice(insertAt)]
-      resyncIndex(next)
-      return next
-    })
-    showToast('已设为下一首播放')
-  }, [currentTrack, resyncIndex, showToast, playNow])
+    sendAction({ action: 'playNext', track })
+    if (currentTrackRef.current) {
+      showToast('已设为下一首播放')
+    }
+  }, [sendAction, showToast])
 
   const clearQueue = useCallback(() => {
-    shouldAutoplayRef.current = false
-    setQueue([])
-    setCurrentTrack(null)
-    setIsPlaying(false)
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.src = ''
-    }
-  }, [])
+    sendAction({ action: 'clearQueue' })
+  }, [sendAction])
+
+  const clearRecent = useCallback(() => {
+    saveRecentTracks([])
+    sendAction({ action: 'clearRecent' })
+  }, [sendAction])
 
   const toggleLike = useCallback((trackId: string) => {
-    const track = queue.find(t => t.id === trackId) || currentTrack
+    const track = queueRef.current.find(t => t.id === trackId) || currentTrackRef.current
+    let nextLiked = false
     if (track) {
-      toggleFavoriteTrack(track)
+      const favs = toggleFavoriteTrack(track)
+      nextLiked = favs.some(t => t.id === trackId)
     }
-    setCurrentTrack(prev => prev && prev.id === trackId ? { ...prev, isLiked: !prev.isLiked } : prev)
-    setQueue(prev => prev.map(t => t.id === trackId ? { ...t, isLiked: !t.isLiked } : t))
-  }, [queue, currentTrack])
+    setCurrentTrack(prev => (prev && prev.id === trackId ? { ...prev, isLiked: nextLiked } : prev))
+    setQueue(prev => prev.map(t => (t.id === trackId ? { ...t, isLiked: nextLiked } : t)))
+    sendAction({ action: 'updateLikeState', trackId, isLiked: nextLiked })
+  }, [sendAction])
 
   const playAll = useCallback((tracks: Track[]) => {
     if (tracks.length === 0) return
-    const favs = loadFavoriteTracks()
-    const favIds = new Set(favs.map(t => t.id))
+    const favIds = new Set(loadFavoriteTracks().map(t => t.id))
     const synced = tracks.map(t => ({ ...t, isLiked: favIds.has(t.id) }))
-    setQueue(synced)
-    shouldAutoplayRef.current = true
-    setCurrentTrack(synced[0])
-    currentIndexRef.current = 0
-    setProgress(0)
-    setIsPlaying(true)
-  }, [])
+    sendAction({ action: 'playAll', tracks: synced })
+  }, [sendAction])
 
   const playFromQueue = useCallback((index: number) => {
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    if (index < 0 || index >= displayQueue.length) return
-    currentIndexRef.current = index
-    shouldAutoplayRef.current = true
-    setCurrentTrack(displayQueue[index])
-    setProgress(0)
-    setIsPlaying(true)
-  }, [isShuffled, queue])
-
-  // 更新 shuffledQueueRef
-  useEffect(() => {
-    shuffledQueueRef.current = isShuffled ? shuffleArray(queue) : queue
-  }, [queue, isShuffled])
-
-  useEffect(() => {
-    if (!currentTrack) {
-      currentIndexRef.current = -1
-      return
-    }
-    const displayQueue = isShuffled ? shuffledQueueRef.current : queue
-    const index = displayQueue.findIndex(track => track.id === currentTrack.id)
-    currentIndexRef.current = index >= 0 ? index : 0
-  }, [currentTrack?.id, isShuffled, queue])
-
-  const persistPlayerState = useCallback(() => {
-    try {
-      const state: PersistedPlayerState = {
-        ...persistedSnapshotRef.current,
-        progress: progressRef.current,
-        currentIndex: currentIndexRef.current,
-      }
-      localStorage.setItem(PLAYER_STATE_KEY, JSON.stringify(state))
-      lastPersistAtRef.current = Date.now()
-    } catch {
-      // ignore persistence failures
-    }
-  }, [])
-
-  useEffect(() => {
-    persistedSnapshotRef.current = {
-      currentTrack,
-      queue,
-      duration,
-      volume,
-      isMuted,
-      repeatMode,
-      isShuffled,
-      wasPlaying: isPlaying,
-      currentIndex: currentIndexRef.current,
-    }
-    persistPlayerState()
-  }, [currentTrack, duration, isMuted, isPlaying, isShuffled, persistPlayerState, queue, repeatMode, volume])
-
-  // 播放进度高频跳动（~4Hz）不每次序列化全量 queue，改为每 5 秒节流保存 + 页面卸载兜底
-  useEffect(() => {
-    if (!isPlaying) return
-    if (Date.now() - lastPersistAtRef.current >= 5000) {
-      persistPlayerState()
-      syncMediaPosition(progress)
-    }
-  }, [isPlaying, persistPlayerState, progress, syncMediaPosition])
-
-  useEffect(() => {
-    window.addEventListener('beforeunload', persistPlayerState)
-    return () => window.removeEventListener('beforeunload', persistPlayerState)
-  }, [persistPlayerState])
-
-  useEffect(() => {
-    const pushTrayState = () => window.electronAPI?.updateTrayPlayerState?.({
-      hasTrack: Boolean(currentTrack),
-      title: currentTrack?.title || '未在播放',
-      artist: currentTrack?.artist || '搜索并播放音乐',
-      coverUrl: currentTrack?.coverUrl ? getBiliImageUrl(currentTrack.coverUrl, 160) : '',
-      isPlaying,
-      queueLength: queue.length,
-      theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
-    })
-    pushTrayState()
-    // 主题切换时重新推送，使托盘面板跟随浅色/深色
-    const observer = new MutationObserver(pushTrayState)
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
-  }, [currentTrack?.artist, currentTrack?.coverUrl, currentTrack?.id, currentTrack?.title, isPlaying, queue.length])
-
-  useEffect(() => {
-    return window.electronAPI?.onTrayPlayerCommand?.((command) => {
-      if (command === 'toggle-play') togglePlay()
-      if (command === 'next') next()
-      if (command === 'prev') prev()
-    })
-  }, [next, prev, togglePlay])
+    sendAction({ action: 'playFromQueue', index })
+  }, [sendAction])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -628,80 +349,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [togglePlay])
 
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-
-    setMediaSessionAction('play', () => {
-      if (!isPlaying) togglePlay()
-    })
-    setMediaSessionAction('pause', () => {
-      if (isPlaying) togglePlay()
-    })
-    setMediaSessionAction('stop', pause)
-    setMediaSessionAction('nexttrack', next)
-    setMediaSessionAction('previoustrack', prev)
-    setMediaSessionAction('seekbackward', (details) => {
-      const step = details.seekOffset || 10
-      handleSetProgress(Math.max(0, progressRef.current - step))
-    })
-    setMediaSessionAction('seekforward', (details) => {
-      const step = details.seekOffset || 10
-      const nextProgress = durationRef.current > 0
-        ? Math.min(durationRef.current, progressRef.current + step)
-        : progressRef.current + step
-      handleSetProgress(nextProgress)
-    })
-    setMediaSessionAction('seekto', (details) => {
-      if (typeof details.seekTime === 'number') handleSetProgress(Math.max(0, details.seekTime))
-    })
-
-    return () => clearMediaSessionActions([
-      'play',
-      'pause',
-      'stop',
-      'nexttrack',
-      'previoustrack',
-      'seekbackward',
-      'seekforward',
-      'seekto',
-    ])
-  }, [handleSetProgress, isPlaying, next, pause, prev, togglePlay])
-
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return
-
-    if (!currentTrack) {
-      navigator.mediaSession.metadata = null
-      navigator.mediaSession.playbackState = 'none'
-      return
-    }
-
-    const artworkUrl = currentTrack.coverUrl ? getBiliImageUrl(currentTrack.coverUrl, 480) : ''
-    const artwork = artworkUrl
-      ? [{ src: artworkUrl, sizes: '480x480', type: getArtworkType(artworkUrl) }]
-      : undefined
-
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: currentTrack.title || '未命名歌曲',
-      artist: currentTrack.artist || 'BiliMusic',
-      album: 'BiliMusic',
-      artwork,
-    })
-  }, [currentTrack?.artist, currentTrack?.coverUrl, currentTrack?.id, currentTrack?.title])
-
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-    navigator.mediaSession.playbackState = currentTrack ? (isPlaying ? 'playing' : 'paused') : 'none'
-  }, [currentTrack, isPlaying])
-
-  useEffect(() => {
-    if (!currentTrack || duration <= 0) return
-    syncMediaPosition(progressRef.current)
-  }, [currentTrack?.id, duration, isPlaying, syncMediaPosition])
-
-  // 稳定的播放器值：进度（高频）不在其中，故进度跳动不会改变此引用，
-  // usePlayer() 的消费者（列表行等）不会因每秒 4 次的进度更新而重渲染。
-  const value = useMemo<PlayerContext>(() => ({
+  const value = useMemo<PlayerContextValue>(() => ({
     currentTrack,
     isPlaying,
     volume,
@@ -727,6 +375,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     playNow,
     playNext,
     clearQueue,
+    clearRecent,
     toggleLike,
     playAll,
     playFromQueue,
@@ -734,10 +383,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     currentTrack, isPlaying, volume, isMuted, repeatMode, isShuffled, queue, loadingAudio,
     play, pause, togglePlay, next, prev, handleSetVolume, setIsMuted, setRepeatMode, setIsShuffled,
     addToQueue, addTracksToQueue, removeFromQueue, removeMultipleFromQueue, moveInQueue,
-    playNow, playNext, clearQueue, toggleLike, playAll, playFromQueue,
+    playNow, playNext, clearQueue, clearRecent, toggleLike, playAll, playFromQueue,
   ])
 
-  // 进度高频更新（timeupdate ~4Hz）独立成 context，仅 PlayerBar/NowPlaying 订阅
   const progressValue = useMemo<PlayerProgress>(() => ({
     progress,
     duration,
@@ -747,38 +395,38 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   return (
     <PlayerContext.Provider value={value}>
       <PlayerProgressContext.Provider value={progressValue}>
-      {children}
-      {toast && (
-        <div
-          style={{
-            position: 'fixed',
-            left: '50%',
-            bottom: 96,
-            transform: 'translateX(-50%)',
-            zIndex: 80,
-            padding: '8px 18px',
-            borderRadius: 'var(--radius-full)',
-            background: 'var(--glass-bg-heavy)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            border: '1px solid var(--glass-border)',
-            boxShadow: 'var(--shadow-lg)',
-            color: 'var(--color-foreground)',
-            fontSize: 13,
-            fontFamily: 'var(--font-body)',
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-          } as React.CSSProperties}
-        >
-          {toast}
-        </div>
-      )}
+        {children}
+        {toast && (
+          <div
+            style={{
+              position: 'fixed',
+              left: '50%',
+              bottom: 96,
+              transform: 'translateX(-50%)',
+              zIndex: 80,
+              padding: '8px 18px',
+              borderRadius: 'var(--radius-full)',
+              background: 'var(--glass-bg-heavy)',
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              border: '1px solid var(--glass-border)',
+              boxShadow: 'var(--shadow-lg)',
+              color: 'var(--color-foreground)',
+              fontSize: 13,
+              fontFamily: 'var(--font-body)',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+            } as React.CSSProperties}
+          >
+            {toast}
+          </div>
+        )}
       </PlayerProgressContext.Provider>
     </PlayerContext.Provider>
   )
 }
 
-export function usePlayer(): PlayerContext {
+export function usePlayer(): PlayerContextValue {
   const ctx = useContext(PlayerContext)
   if (!ctx) throw new Error('usePlayer must be used within PlayerProvider')
   return ctx

@@ -227,15 +227,90 @@ export function createPlaylistsExport() {
   }
 }
 
-function isPlainPlaylist(value: unknown): value is Playlist {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Partial<Playlist>
-  return typeof item.name === 'string' && Array.isArray(item.tracks)
+function normalizeImportedTrack(raw: unknown, fallbackIdx: number): Track | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const bvid = typeof r.bvid === 'string' ? r.bvid : ''
+  const aid = (typeof r.aid === 'string' || typeof r.aid === 'number') ? r.aid : undefined
+  const cid = (typeof r.cid === 'string' || typeof r.cid === 'number') ? r.cid : undefined
+  const id = String(r.id || bvid || aid || `track_${Date.now()}_${fallbackIdx}`).trim()
+  const title = String(r.title ?? r.name ?? '').trim()
+  if (!id || !title) return null
+
+  const ownerName = (r.owner && typeof r.owner === 'object' && typeof (r.owner as Record<string, unknown>).name === 'string')
+    ? String((r.owner as Record<string, unknown>).name)
+    : ''
+  const artist = String(r.artist ?? r.author ?? r.up ?? ownerName ?? '未知作者')
+  const coverUrl = String(r.coverUrl ?? r.cover ?? r.pic ?? '')
+  const duration = Number(r.duration) || 0
+  const videoUrl = String(r.videoUrl ?? r.url ?? (bvid ? `https://www.bilibili.com/video/${bvid}` : ''))
+
+  return {
+    id,
+    title,
+    artist,
+    coverUrl,
+    duration,
+    videoUrl,
+    bvid,
+    ...(aid !== undefined ? { aid } : {}),
+    ...(cid !== undefined ? { cid } : {}),
+    playCount: Number(r.playCount ?? r.play) || 0,
+    isLiked: Boolean(r.isLiked),
+    ...(typeof r.likedAt === 'string' ? { likedAt: r.likedAt } : {}),
+  }
+}
+
+function parseMaybeNestedArray(val: unknown): unknown[] | null {
+  if (Array.isArray(val)) return val
+  if (typeof val === 'string') {
+    try {
+      const inner = JSON.parse(val)
+      return Array.isArray(inner) ? inner : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function extractIncomingPlaylists(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed
+  if (!parsed || typeof parsed !== 'object') return null
+  const obj = parsed as Record<string, unknown>
+
+  const direct = parseMaybeNestedArray(obj.playlists)
+    ?? parseMaybeNestedArray(obj.bilimusic_playlists)
+    ?? parseMaybeNestedArray(obj.list)
+  if (direct) return direct
+
+  if (obj.data && typeof obj.data === 'object') {
+    if (Array.isArray(obj.data)) return obj.data
+    const nested = parseMaybeNestedArray((obj.data as Record<string, unknown>).playlists)
+      ?? parseMaybeNestedArray((obj.data as Record<string, unknown>).list)
+    if (nested) return nested
+  }
+
+  if (typeof (obj.name ?? obj.title ?? obj.playlistName) === 'string'
+      && Array.isArray(obj.tracks ?? obj.songs ?? obj.list ?? obj.items)) {
+    return [obj]
+  }
+
+  const favs = parseMaybeNestedArray(obj.favorites) ?? parseMaybeNestedArray(obj.bilimusic_favorites)
+  if (favs && favs.length > 0) {
+    return [{ name: '我喜欢的音乐', tracks: favs }]
+  }
+
+  return null
 }
 
 export function importPlaylistsFromText(text: string): { imported: number; skipped: number } {
-  const parsed = JSON.parse(text)
-  const incoming = Array.isArray(parsed) ? parsed : parsed?.playlists
+  const cleaned = text.replace(/^\uFEFF/, '').trim()
+  if (!cleaned) {
+    throw new Error('文件内容为空')
+  }
+  const parsed = JSON.parse(cleaned)
+  const incoming = extractIncomingPlaylists(parsed)
   if (!Array.isArray(incoming)) {
     throw new Error('文件中没有找到歌单列表')
   }
@@ -247,19 +322,31 @@ export function importPlaylistsFromText(text: string): { imported: number; skipp
   const imported: Playlist[] = []
   let skipped = 0
 
-  for (const item of incoming) {
-    if (!isPlainPlaylist(item)) {
+  for (const rawItem of incoming) {
+    if (!rawItem || typeof rawItem !== 'object') {
+      skipped += 1
+      continue
+    }
+    const item = rawItem as Record<string, unknown>
+    const rawName = item.name ?? item.title ?? item.playlistName
+    const rawTracks = item.tracks ?? item.songs ?? item.list ?? item.items
+    if (typeof rawName !== 'string' || !Array.isArray(rawTracks)) {
       skipped += 1
       continue
     }
 
-    const name = item.name.trim()
+    const name = rawName.trim()
     if (!name) {
       skipped += 1
       continue
     }
 
-    const id = item.id && !existingIds.has(item.id) ? item.id : createId()
+    const tracks = rawTracks
+      .map((t, idx) => normalizeImportedTrack(t, idx))
+      .filter((t): t is Track => t !== null)
+
+    const rawId = typeof item.id === 'string' ? item.id : ''
+    const id = rawId && !existingIds.has(rawId) ? rawId : createId()
     existingIds.add(id)
     const finalName = existingNames.has(name) ? `${name} 导入` : name
     existingNames.add(finalName)
@@ -267,10 +354,12 @@ export function importPlaylistsFromText(text: string): { imported: number; skipp
     imported.push({
       id,
       name: finalName,
-      description: item.description || '',
-      coverUrl: item.coverUrl || item.tracks[0]?.coverUrl || '',
-      tracks: item.tracks,
-      createdAt: item.createdAt || now,
+      description: typeof item.description === 'string' ? item.description : '',
+      coverUrl: typeof item.coverUrl === 'string' && item.coverUrl
+        ? item.coverUrl
+        : (tracks[0]?.coverUrl || ''),
+      tracks,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : now,
       updatedAt: now,
     })
   }

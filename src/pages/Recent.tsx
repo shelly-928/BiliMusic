@@ -21,7 +21,8 @@ export default function Recent() {
   const handleClear = useCallback(() => {
     saveRecentTracks([])
     setTracks([])
-  }, [])
+    player.clearRecent()
+  }, [player])
 
   const handlePlayAll = useCallback(() => {
     if (tracks.length > 0) player.playAll(tracks)

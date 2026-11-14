@@ -8,6 +8,11 @@ release
 node_modules
 
 dev.log
+.venv
+__pycache__
+*.pyc
+backend/bin/
+*.bat
 
 # 鸿蒙平台
 platform/HarmonyOS/node_modules

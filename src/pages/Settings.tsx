@@ -7,6 +7,7 @@ import {
   FileUp,
   Download,
   FolderOpen,
+  GitFork,
   Github,
   Info,
   LogIn,
@@ -35,7 +36,7 @@ export default function Settings() {
   const { isLoggedIn, username, avatar, logout, setShowLogin } = useAuth()
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const [playlistTransferMessage, setPlaylistTransferMessage] = useState('')
-  const [appVersion, setAppVersion] = useState('1.0.0')
+  const [appVersion, setAppVersion] = useState('0.1.0')
   const [updateStatus, setUpdateStatus] = useState('')
   const [updateAction, setUpdateAction] = useState<'restart' | 'reload' | null>(null)
 
@@ -139,27 +140,66 @@ export default function Settings() {
     if (next?.trim()) setAppSettings({ downloadDir: next.trim() })
   }
 
-  const exportPlaylists = () => {
+  const exportPlaylists = async () => {
     const payload = createPlaylistsExport()
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+    const jsonText = JSON.stringify(payload, null, 2)
+    const filename = `bilimusic-playlists-${new Date().toISOString().slice(0, 10)}.json`
+    const nativeSave = window.pywebview?.api?.save_json_file
+    if (nativeSave) {
+      try {
+        const savedPath = await nativeSave(filename, jsonText)
+        if (!savedPath) return
+        setPlaylistTransferMessage(`已导出 ${payload.playlists.length} 个歌单`)
+        return
+      } catch (err) {
+        setPlaylistTransferMessage(err instanceof Error ? `导出失败: ${err.message}` : '导出失败，请重试')
+        return
+      }
+    }
+
+    const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `bilimusic-playlists-${new Date().toISOString().slice(0, 10)}.json`
+    link.download = filename
     link.click()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
     setPlaylistTransferMessage(`已导出 ${payload.playlists.length} 个歌单`)
+  }
+
+  const applyImportedText = (text: string) => {
+    const result = importPlaylistsFromText(text)
+    if (result.imported === 0 && result.skipped > 0) {
+      setPlaylistTransferMessage(`未导入有效歌单，已跳过 ${result.skipped} 个无效项目`)
+      return
+    }
+    setPlaylistTransferMessage(`已导入 ${result.imported} 个歌单${result.skipped ? `，跳过 ${result.skipped} 个无效项目` : ''}`)
   }
 
   const importPlaylists = async (file?: File) => {
     if (!file) return
     try {
-      const result = importPlaylistsFromText(await file.text())
-      setPlaylistTransferMessage(`已导入 ${result.imported} 个歌单${result.skipped ? `，跳过 ${result.skipped} 个无效项目` : ''}`)
+      applyImportedText(await file.text())
     } catch (error) {
       setPlaylistTransferMessage(error instanceof Error ? error.message : '导入失败，请检查文件格式')
     } finally {
       if (importInputRef.current) importInputRef.current.value = ''
+    }
+  }
+
+  const handleImportClick = async () => {
+    const pickJson = window.pywebview?.api?.open_json_file
+    if (!pickJson) {
+      importInputRef.current?.click()
+      return
+    }
+    try {
+      const content = await pickJson()
+      if (typeof content === 'string') {
+        applyImportedText(content)
+      }
+    } catch (error) {
+      setPlaylistTransferMessage(error instanceof Error ? error.message : '导入失败，请检查文件格式')
     }
   }
 
@@ -234,7 +274,7 @@ export default function Settings() {
                 <FileDown size={14} />
                 导出歌单
               </button>
-              <button type="button" onClick={() => importInputRef.current?.click()}>
+              <button type="button" onClick={handleImportClick}>
                 <FileUp size={14} />
                 导入歌单
               </button>
@@ -267,13 +307,15 @@ export default function Settings() {
 
           <SettingsGroup title="关于" icon={<Info size={20} />}>
             <SettingsRow label="版本">
-              <span className="settings-version">BiliMusic v{appVersion}</span>
+              <span className="settings-version">BiliMusic Py v{appVersion}</span>
             </SettingsRow>
             <div className="settings-actions">
-              <button type="button" onClick={checkUpdate}>
-                <SettingsIcon size={14} />
-                检查更新
-              </button>
+              {window.electronAPI?.checkForUpdate && (
+                <button type="button" onClick={checkUpdate}>
+                  <SettingsIcon size={14} />
+                  检查更新
+                </button>
+              )}
               {updateAction && (
                 <button type="button" onClick={runUpdateAction}>
                   <RefreshCw size={14} />
@@ -283,6 +325,10 @@ export default function Settings() {
               <button type="button" onClick={() => window.electronAPI?.openExternal?.('https://github.com/HanversionOvO/BiliMusic')}>
                 <Github size={14} />
                 关于项目
+              </button>
+              <button type="button" onClick={() => window.electronAPI?.openExternal?.('https://github.com/shelly-928/BiliMusic')}>
+                <GitFork size={14} />
+                当前分支
               </button>
               {updateStatus && <span>{updateStatus}</span>}
             </div>
@@ -309,65 +355,67 @@ export default function Settings() {
             </SettingsRow>
           </SettingsGroup>
 
-          <SettingsGroup title="歌单云同步" icon={<Cloud size={20} />}>
-            <SettingsRow label="WebDAV 地址">
-              <input
-                className="settings-input"
-                type="url"
-                value={davUrl}
-                onChange={(e) => setDavUrl(e.target.value)}
-                placeholder="https://dav.jianguoyun.com/dav/"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </SettingsRow>
-            <SettingsRow label="账号">
-              <input
-                className="settings-input"
-                type="text"
-                value={davUser}
-                onChange={(e) => setDavUser(e.target.value)}
-                placeholder="WebDAV 账号"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </SettingsRow>
-            <SettingsRow label="密码" description="坚果云等建议使用应用专用密码">
-              <input
-                className="settings-input"
-                type="password"
-                value={davPass}
-                onChange={(e) => setDavPass(e.target.value)}
-                placeholder={davConfigured ? '已保存（修改请重新输入）' : '应用专用密码'}
-                autoComplete="off"
-              />
-            </SettingsRow>
-            <div className="settings-actions">
-              <button type="button" onClick={handleTestWebdav}>
-                <RefreshCw size={14} />
-                测试连接
-              </button>
-              <button type="button" onClick={handleSaveWebdav}>
-                保存配置
-              </button>
-            </div>
-            <div className="settings-actions is-divided">
-              <button type="button" className="is-primary" onClick={() => runSyncTask(runSync, '正在同步…')} disabled={!davConfigured || syncBusy}>
-                <RefreshCw size={14} />
-                立即同步
-              </button>
-              <button type="button" onClick={() => runSyncTask(forceUpload, '正在上传…')} disabled={!davConfigured || syncBusy}>
-                <CloudUpload size={14} />
-                上传到云端
-              </button>
-              <button type="button" onClick={() => runSyncTask(forceDownload, '正在下载…')} disabled={!davConfigured || syncBusy}>
-                <CloudDownload size={14} />
-                从云端下载
-              </button>
-              {syncMessage && <span>{syncMessage}</span>}
-              {lastSync && <span>上次同步：{new Date(lastSync).toLocaleString()}</span>}
-            </div>
-          </SettingsGroup>
+          {window.electronAPI?.configureWebdav && (
+            <SettingsGroup title="歌单云同步" icon={<Cloud size={20} />}>
+              <SettingsRow label="WebDAV 地址">
+                <input
+                  className="settings-input"
+                  type="url"
+                  value={davUrl}
+                  onChange={(e) => setDavUrl(e.target.value)}
+                  placeholder="https://dav.jianguoyun.com/dav/"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </SettingsRow>
+              <SettingsRow label="账号">
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={davUser}
+                  onChange={(e) => setDavUser(e.target.value)}
+                  placeholder="WebDAV 账号"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </SettingsRow>
+              <SettingsRow label="密码" description="坚果云等建议使用应用专用密码">
+                <input
+                  className="settings-input"
+                  type="password"
+                  value={davPass}
+                  onChange={(e) => setDavPass(e.target.value)}
+                  placeholder={davConfigured ? '已保存（修改请重新输入）' : '应用专用密码'}
+                  autoComplete="off"
+                />
+              </SettingsRow>
+              <div className="settings-actions">
+                <button type="button" onClick={handleTestWebdav}>
+                  <RefreshCw size={14} />
+                  测试连接
+                </button>
+                <button type="button" onClick={handleSaveWebdav}>
+                  保存配置
+                </button>
+              </div>
+              <div className="settings-actions is-divided">
+                <button type="button" className="is-primary" onClick={() => runSyncTask(runSync, '正在同步…')} disabled={!davConfigured || syncBusy}>
+                  <RefreshCw size={14} />
+                  立即同步
+                </button>
+                <button type="button" onClick={() => runSyncTask(forceUpload, '正在上传…')} disabled={!davConfigured || syncBusy}>
+                  <CloudUpload size={14} />
+                  上传到云端
+                </button>
+                <button type="button" onClick={() => runSyncTask(forceDownload, '正在下载…')} disabled={!davConfigured || syncBusy}>
+                  <CloudDownload size={14} />
+                  从云端下载
+                </button>
+                {syncMessage && <span>{syncMessage}</span>}
+                {lastSync && <span>上次同步：{new Date(lastSync).toLocaleString()}</span>}
+              </div>
+            </SettingsGroup>
+          )}
         </div>
       </div>
     </MusicPageShell>

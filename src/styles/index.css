@@ -1975,6 +1975,10 @@ body {
   color: #ff375f;
 }
 
+.now-playing-round.is-active {
+  background: rgba(255, 55, 95, 0.18);
+}
+
 .now-playing-progress {
   margin-top: 26px;
 }
@@ -2032,6 +2036,11 @@ body {
 .now-playing-volume-popover:focus-within .now-playing-volume-trigger {
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
+}
+
+.now-playing-round.is-active:hover {
+  color: #ff456a;
+  background: rgba(255, 55, 95, 0.26);
 }
 
 .now-playing-play {

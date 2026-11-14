@@ -16,7 +16,7 @@ import {
   Music,
   Maximize2,
 } from 'lucide-react'
-import { usePlayer, usePlayerProgress } from '@/contexts/PlayerContext'
+import { REPEAT_MODE_LABELS, REPEAT_MODE_ORDER, usePlayer, usePlayerProgress } from '@/contexts/PlayerContext'
 import { useNowPlaying } from '@/contexts/NowPlayingContext'
 import { useAddToPlaylist } from '@/contexts/AddToPlaylistContext'
 import PlayQueue from '@/components/PlayQueue'
@@ -263,11 +263,12 @@ export default function PlayerBar() {
           <TransportButton
             active={player.isShuffled}
             onClick={() => player.setIsShuffled(!player.isShuffled)}
-            ariaLabel="随机播放"
+            ariaLabel={player.isShuffled ? '随机播放' : '顺序播放'}
+            title={player.isShuffled ? '随机播放' : '顺序播放'}
           >
             <Shuffle size={18} />
           </TransportButton>
-          <TransportButton onClick={player.prev} ariaLabel="上一首">
+          <TransportButton onClick={player.prev} ariaLabel="上一首" title="上一首">
             <SkipBack size={21} />
           </TransportButton>
           <PlayButton
@@ -275,17 +276,17 @@ export default function PlayerBar() {
             loading={player.loadingAudio}
             onClick={player.togglePlay}
           />
-          <TransportButton onClick={player.next} ariaLabel="下一首">
+          <TransportButton onClick={player.next} ariaLabel="下一首" title="下一首">
             <SkipForward size={21} />
           </TransportButton>
           <TransportButton
             active={player.repeatMode !== 'none'}
             onClick={() => {
-              const modes = ['none', 'all', 'one'] as const
-              const idx = modes.indexOf(player.repeatMode)
-              player.setRepeatMode(modes[(idx + 1) % 3])
+              const idx = REPEAT_MODE_ORDER.indexOf(player.repeatMode)
+              player.setRepeatMode(REPEAT_MODE_ORDER[(idx + 1) % REPEAT_MODE_ORDER.length])
             }}
-            ariaLabel="循环模式"
+            ariaLabel={`循环模式：${REPEAT_MODE_LABELS[player.repeatMode]}`}
+            title={`循环模式：${REPEAT_MODE_LABELS[player.repeatMode]}`}
           >
             <span style={{ position: 'relative', display: 'flex' }}>
               <Repeat size={18} />
@@ -460,25 +461,29 @@ function TransportButton({
   active = false,
   onClick,
   ariaLabel,
+  title,
 }: {
   children: ReactNode
   active?: boolean
   onClick: () => void
   ariaLabel: string
+  title?: string
 }) {
   return (
     <motion.button
       type="button"
       aria-label={ariaLabel}
+      title={title ?? ariaLabel}
       onClick={onClick}
-        whileHover={{ y: -1, color: active ? '#ff375f' : 'var(--player-text)' }}
+      whileHover={{ y: -1, color: active ? '#ff456a' : 'var(--player-text)' }}
       whileTap={{ scale: 0.9 }}
       transition={{ duration: 0.18 }}
       style={{
-        width: 24,
+        width: 28,
         height: 28,
         padding: 0,
-        background: 'none',
+        borderRadius: 8,
+        background: active ? 'rgba(255, 55, 95, 0.14)' : 'none',
         border: 'none',
         color: active ? '#ff375f' : 'var(--player-subtle-text)',
         display: 'flex',

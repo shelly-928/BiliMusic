@@ -5,7 +5,7 @@ import {
   ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
   Heart, Volume2, VolumeX, Search, Music, Loader2, Maximize2, Minimize2, X, MessageCircle, ExternalLink, ThumbsUp, RefreshCw,
 } from 'lucide-react'
-import { usePlayer, usePlayerProgress } from '@/contexts/PlayerContext'
+import { REPEAT_MODE_LABELS, REPEAT_MODE_ORDER, usePlayer, usePlayerProgress } from '@/contexts/PlayerContext'
 import { useNowPlaying } from '@/contexts/NowPlayingContext'
 import { useAppSettings } from '@/hooks/useAppSettings'
 import { useLyrics } from '@/hooks/useLyrics'
@@ -331,7 +331,11 @@ export default function NowPlaying() {
                   </div>
                 </div>
                 <div className="now-playing-control-cluster">
-                  <RoundIcon active={player.isShuffled} onClick={() => player.setIsShuffled(!player.isShuffled)} title="随机播放">
+                  <RoundIcon
+                    active={player.isShuffled}
+                    onClick={() => player.setIsShuffled(!player.isShuffled)}
+                    title={player.isShuffled ? '随机播放' : '顺序播放'}
+                  >
                     <Shuffle size={20} />
                   </RoundIcon>
                   <RoundIcon onClick={player.prev} title="上一首">
@@ -355,10 +359,10 @@ export default function NowPlaying() {
                   <RoundIcon
                     active={player.repeatMode !== 'none'}
                     onClick={() => {
-                      const modes = ['none', 'all', 'one'] as const
-                      player.setRepeatMode(modes[(modes.indexOf(player.repeatMode) + 1) % 3])
+                      const nextMode = REPEAT_MODE_ORDER[(REPEAT_MODE_ORDER.indexOf(player.repeatMode) + 1) % REPEAT_MODE_ORDER.length]
+                      player.setRepeatMode(nextMode)
                     }}
-                    title="循环模式"
+                    title={`循环模式：${REPEAT_MODE_LABELS[player.repeatMode]}`}
                   >
                     <span className="now-playing-repeat">
                       <Repeat size={20} />

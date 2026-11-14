@@ -14,7 +14,10 @@ function isElectron(): boolean {
 // 在 Electron 环境下直接用浏览器 fetch（CORS 已被主进程绕过）
 // 相比 IPC net.fetch，浏览器 fetch 自带完整请求头/Cookie，不会被 B站反爬拦截
 async function electronFetch<T>(path: string, params?: Record<string, string | number>): Promise<T> {
-  const url = new URL('https://api.bilibili.com' + path)
+  const base = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
+    ? `${window.location.origin}/bili-api`
+    : 'https://api.bilibili.com'
+  const url = new URL(base + path)
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
   }

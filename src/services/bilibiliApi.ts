@@ -4,7 +4,9 @@
  * 已验证的 API 接口，通过浏览器 Cookie 认证访问 B 站接口
  */
 
-const BILI_API = 'https://api.bilibili.com'
+const USE_LOCAL_PROXY = typeof window !== 'undefined' && window.location.protocol.startsWith('http')
+const BILI_API = USE_LOCAL_PROXY ? `${window.location.origin}/bili-api` : 'https://api.bilibili.com'
+const BILI_PASSPORT = USE_LOCAL_PROXY ? `${window.location.origin}/bili-passport` : 'https://passport.bilibili.com'
 
 // B站图片地址统一转 https：http:// 的 hdslb 图在渲染进程会加载失败
 // （大量 https 连接建立后同主机 cleartext 请求冲突），// 协议相对地址同样补全
@@ -698,7 +700,7 @@ export interface QrPollResult {
  * 生成扫码登录二维码
  */
 export async function generateQrCode(): Promise<QrCodeData> {
-  const resp = await fetch(`${BILI_API.replace('api', 'passport')}/x/passport-login/web/qrcode/generate`, {
+  const resp = await fetch(`${BILI_PASSPORT}/x/passport-login/web/qrcode/generate`, {
     credentials: 'include',
     headers: { Referer: 'https://passport.bilibili.com/login' },
   })
@@ -722,7 +724,7 @@ export async function generateQrCode(): Promise<QrCodeData> {
  */
 export async function pollQrCode(qrcodeKey: string): Promise<QrPollResult> {
   const resp = await fetch(
-    `${BILI_API.replace('api', 'passport')}/x/passport-login/web/qrcode/poll?qrcode_key=${qrcodeKey}`,
+    `${BILI_PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${qrcodeKey}`,
     {
       credentials: 'include',
       headers: { Referer: 'https://passport.bilibili.com/login' },

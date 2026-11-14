@@ -1,0 +1,13 @@
+[project]
+name = "bilimusic-py"
+version = "0.1.0"
+description = "Lightweight Python + mpv + pywebview runtime for BiliMusic"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.11",
+    "curl-cffi>=0.10",
+    "pillow>=11.0",
+    "pystray>=0.19",
+    "python-mpv>=1.0",
+    "pywebview>=5.0",
+]
