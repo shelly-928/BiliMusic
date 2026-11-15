@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 from pathlib import Path
 import sys
 import threading
@@ -9,7 +10,7 @@ import webbrowser
 from PIL import Image
 import webview
 
-from backend.config import DATA_DIR, ICON_PATH, WEBVIEW_DATA_DIR
+from backend.config import DATA_DIR, ICON_PATH, STATE_FILE, WEBVIEW_DATA_DIR
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 WM_NCLBUTTONDOWN = 0x00A1
@@ -29,6 +30,8 @@ class WindowApi:
         self._window: webview.Window | None = None
         self._is_maximized = False
         self._is_fullscreen = False
+        self._revealed = False
+        self._reveal_lock = threading.Lock()
 
     def _attach(self, win: webview.Window) -> None:
         self._window = win
@@ -169,8 +172,95 @@ class WindowApi:
         except Exception:
             pass
 
+    def _reveal_window(self) -> None:
+        with self._reveal_lock:
+            if self._revealed or not self._window:
+                return
+            self._revealed = True
+        win = self._window
+        native = getattr(win, "native", None)
+        if native is None:
+            try:
+                win.show()
+            except Exception:
+                pass
+            return
+
+        def _start_fade() -> None:
+            try:
+                import System.Windows.Forms as WinForms
+
+                if getattr(native, "IsDisposed", False):
+                    return
+                native.Opacity = 0.0
+                native.Show()
+                native.Activate()
+
+                def _clear_initial_focus() -> None:
+                    try:
+                        win.evaluate_js(
+                            "if (document.activeElement && document.activeElement !== document.body "
+                            "&& typeof document.activeElement.blur === 'function') { document.activeElement.blur(); }"
+                        )
+                    except Exception:
+                        pass
+
+                focus_timer = threading.Timer(0.05, _clear_initial_focus)
+                focus_timer.daemon = True
+                focus_timer.start()
+
+                steps = 10
+                state = {"step": 0}
+                timer = WinForms.Timer()
+                timer.Interval = 15
+
+                def _on_tick(_sender: Any, _args: Any) -> None:
+                    try:
+                        if getattr(native, "IsDisposed", False):
+                            timer.Stop()
+                            timer.Dispose()
+                            return
+                        state["step"] += 1
+                        t = min(1.0, state["step"] / steps)
+                        native.Opacity = 1.0 - (1.0 - t) * (1.0 - t)
+                        if state["step"] >= steps:
+                            native.Opacity = 1.0
+                            timer.Stop()
+                            timer.Dispose()
+                    except Exception:
+                        try:
+                            timer.Stop()
+                            timer.Dispose()
+                        except Exception:
+                            pass
+
+                timer.Tick += _on_tick
+                timer.Start()
+            except Exception:
+                try:
+                    native.Opacity = 1.0
+                    win.show()
+                except Exception:
+                    pass
+
+        try:
+            if native.InvokeRequired:
+                from System import Action
+
+                native.BeginInvoke(Action(_start_fade))
+            else:
+                _start_fade()
+        except Exception:
+            try:
+                win.show()
+            except Exception:
+                pass
+
     def _focus_window(self) -> None:
         if not self._window:
+            return
+        if not self._revealed:
+            self._reveal_window()
             return
         try:
             self._window.restore()
@@ -194,6 +284,17 @@ def _stdin_control_loop(api: WindowApi) -> None:
             break
 
 
+def _initial_bg_color() -> str:
+    try:
+        if STATE_FILE.exists():
+            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("theme") == "light":
+                return "#F6F7F9"
+    except Exception:
+        pass
+    return "#17181A"
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("Usage: python -m backend.ui_window <url>")
@@ -212,9 +313,22 @@ def main() -> None:
         frameless=True,
         easy_drag=False,
         shadow=True,
-        background_color="#18191C",
+        hidden=True,
+        background_color=_initial_bg_color(),
     )
     api._attach(win)
+
+    fallback_timer = threading.Timer(1.2, api._reveal_window)
+    fallback_timer.daemon = True
+
+    def on_loaded() -> None:
+        fallback_timer.cancel()
+        reveal_timer = threading.Timer(0.06, api._reveal_window)
+        reveal_timer.daemon = True
+        reveal_timer.start()
+
+    win.events.loaded += on_loaded
+    fallback_timer.start()
 
     def on_maximized() -> None:
         api._is_maximized = True

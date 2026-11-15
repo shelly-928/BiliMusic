@@ -54,6 +54,7 @@ class MpvPlayer:
         player = mpv.MPV(
             config=False,
             idle=True,
+            pause=True,
             vid="no",
             vo="null",
             audio_display="no",

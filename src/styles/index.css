@@ -781,7 +781,13 @@ body {
   border: 0;
   background: transparent;
   color: var(--color-muted);
+  outline: none;
   transition: background var(--duration-fast) var(--easing-default), color var(--duration-fast) var(--easing-default);
+}
+
+.app-window-button:focus,
+.app-window-button:focus-visible {
+  outline: none;
 }
 
 .app-window-button:hover {

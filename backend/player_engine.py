@@ -303,7 +303,12 @@ class PlayerEngine:
                 self.duration = float(val)
                 await self._broadcast_progress()
             elif name == "pause" and isinstance(val, bool):
-                new_playing = not val and self.current_track is not None and not self.loading_audio
+                new_playing = (
+                    not val
+                    and self.current_track is not None
+                    and not self.loading_audio
+                    and self._load_gen > 0
+                )
                 if new_playing != self.is_playing:
                     self.is_playing = new_playing
                     self._notify_tray()
@@ -403,20 +408,13 @@ class PlayerEngine:
         if self.loading_audio:
             return
         # If restored from disk after restart and mpv hasn't loaded the track yet
-        if self.duration == 0 and not self.is_playing:
+        if not self.is_playing and (self._load_gen == 0 or self.duration == 0):
             await self._load_and_play_track(self.current_track, autoplay=True, resume_pos=self.progress)
             return
         if self.is_playing:
             self._mpv.set_pause(True)
             self.is_playing = False
         else:
-            # Ensure track is actually loaded in mpv (for restored state)
-            if self.progress > 0 and self._load_gen == 0:
-                await self._load_and_play_track(self.current_track, autoplay=True, resume_pos=self.progress)
-                return
-            if self._load_gen == 0:
-                await self._load_and_play_track(self.current_track, autoplay=True, resume_pos=self.progress)
-                return
             self._mpv.set_pause(False)
             self.is_playing = True
         await self._broadcast_state()

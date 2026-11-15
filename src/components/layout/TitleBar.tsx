@@ -54,6 +54,7 @@ function WindowButton({
   return (
     <button
       type="button"
+      tabIndex={-1}
       aria-label={label}
       title={label}
       className={`app-window-button ${isClose ? 'app-window-button--close' : ''}`}
